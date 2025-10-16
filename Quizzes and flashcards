@@ -1,0 +1,171 @@
+import tkinter as tk
+from tkinter import simpledialog
+from tkinter import messagebox
+import csv
+from tkinter import (filedialog)
+import os
+
+root = tk.Tk()
+root.title("Flashcards & quizzes")
+root.minsize(width=400, height=800)
+
+
+flashcards = []
+
+
+label1 = tk.Label(text = "Flashcard & quizzes", font = ("Arial", 13))
+label1.pack(pady = 10)
+
+def add_flashcard():
+    keyword = simpledialog.askstring("Input", "Enter a keyword")
+    if keyword is None:
+        return        #This stops code from running when keyword is none
+
+    definition = simpledialog.askstring("Input", "Enter a definition")
+    if definition is None:
+        return
+
+    flashcards.append({"keyword": keyword, "definition": definition})
+    save_flashcards_to_csv()
+
+button1 = tk.Button(text = "make a flashcard", command = add_flashcard)
+button1.pack()
+
+def modify_flashcard():
+    keyword_modify = simpledialog.askstring("modify flashcard", "Enter the keyword of the flashcard you want to modify")
+
+    if keyword_modify is None:
+        return
+    found = False
+    for card in flashcards:
+        if card["keyword"].lower() == keyword_modify.lower():
+           new_keyword = simpledialog.askstring("modify flashcard", "Enter the new keyword of the flashcard")
+           new_definition = simpledialog.askstring("modify flashcard", "Enter the new definition")
+
+           if new_keyword and new_definition:
+                card["keyword"] = new_keyword
+                card["definition"] = new_definition
+                save_flashcards_to_csv()
+                messagebox.showinfo("Success", f"Flashcard {keyword_modify} updated")
+           found = True
+           break
+    if not found:
+        messagebox.showerror("Error", "No existing flashcard with that keyword")
+
+button2 = tk.Button(text = "modify a flashcard", command = modify_flashcard)
+button2.pack()
+
+def view_flashcards():
+    load_flashcards_in_csv()
+
+    if not flashcards:
+       messagebox.showinfo("No flashcards", "You didn't add any flashcards")
+       return
+
+    new_window = tk.Toplevel(root)
+    new_window.title("All flashcards")
+
+    tk.Label(new_window, text = "Your flashcards", font = ("Arial", 16, "bold")).pack(pady = 5)
+
+    for card in flashcards:
+       text = f"{card['keyword']}: {card['definition']}"
+       tk.Label(new_window, text=text, font=("Arial", 12)).pack(anchor='w', padx=10, pady=2)
+
+button3 = tk.Button(text = "view flashcards", command = view_flashcards)
+button3.pack()
+
+
+def load_flashcards_in_csv():
+    file_path = "flashcards.csv"
+    flashcards.clear()
+    # If the file doesn't exist, create it with a sample entry
+    if not os.path.exists(file_path):
+        with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Keyword", "Definition"])
+        messagebox.showinfo("File Created", "No CSV file found, so a new 'flashcards.csv' was created!")
+        return
+    # Now load from the CSV file
+    with open(file_path, newline='', encoding='utf-8') as csvfile:
+        reader = csv.reader(csvfile)
+        count = 0
+        for row in reader:
+            if len(row) >= 2:
+                flashcards.append({"keyword": row[0], "definition": row[1]})
+                count += 1
+
+
+def save_flashcards_to_csv():
+    file_path = "flashcards.csv"
+    with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+        for card in flashcards:
+            writer.writerow([card["keyword"], card["definition"]])
+
+load_flashcards_in_csv()
+
+def delete_flashcards():
+    if messagebox.askyesno("Confirm", "Delete ALL flashcards?"):
+        flashcards.clear()
+        save_flashcards_to_csv()
+        messagebox.showinfo("Deleted", "All flashcards removed!")
+
+button4 = tk.Button(text = "delete flashcards", command = delete_flashcards)
+button4.pack()
+
+def start_quiz():
+    if not flashcards:
+        messagebox.showinfo("No flashcards", "You didn't add any flashcards")
+        return
+    index = 0
+    quiz_window = tk.Toplevel(root)
+    quiz_window.title("Quiz")
+    quiz_window.geometry("400x300")
+
+    question_label = tk.Label(quiz_window, text = "", font = ("Arial", 12))
+    question_label.pack(pady = 20)
+
+    card = flashcards[index]
+    question_label.config(text = f"keyword : {card['keyword']}")
+
+    definition_label = tk.Label(quiz_window, text = "", font = ("Arial", 12))
+    definition_label.pack(pady = 20)
+
+    def show_definition():
+        card = flashcards[index]
+        definition_label.config(text = f"definition : {card['definition']}")
+
+    button5 = tk.Button(quiz_window, text= "show answer", command = show_definition)
+    button5.pack()
+
+    def next_card():
+        nonlocal index
+        index += 1
+        if index >= len(flashcards):
+            messagebox.showinfo("Quiz finished", f"You finished all {index + 1} flashcards!")
+            quiz_window.destroy()
+            return
+
+        card = flashcards[index]
+        question_label.config(text = f"keyword : {card['keyword']}")
+        definition_label.config(text = "")
+
+    def stop_quiz():
+        confirm = messagebox.askyesno("Confirm", "Stop quiz?")
+        if confirm:
+            messagebox.showinfo("Quiz finished", f"You stopped at flashcard {index + 1} out of {len(flashcards)}")
+            quiz_window.destroy()
+
+    next_card = tk.Button(quiz_window, text="next", command=next_card)
+    next_card.pack()
+
+    stop_button = tk.Button(quiz_window, text="stop quiz", command=stop_quiz, fg = "red")
+    stop_button.pack()
+
+button6 = tk.Button(text = "start quiz", command = start_quiz, fg = "Green")
+button6.pack(pady=5)
+
+
+
+root.mainloop()
+
