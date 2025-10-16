@@ -1,0 +1,51 @@
+┌────────────────────────────────────────────────────┐
+│ Start                                               │
+└───────┬─────────────────────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────────────────────────────┐
+│ Create main window (Tk)                             │
+│ title = "Personal Weekly Study Assistant"          │
+│ size  = 1000x700                                   │
+└───────┬─────────────────────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────────────────────────────┐
+│ Create ttk.Notebook (tabbed interface)              │
+│ Add tabs (Frames)                                   │
+│  - Weekly Calendar  -> CalendarApp                  │
+│  - Course Tracker   -> CourseTracker                │
+│  - Flashcards/Quiz  -> FlashcardApp                 │
+│  - Pomodoro Timer   -> PomodoroApp                  │
+│  - Note System      -> NotesPanel + NotesService    │
+└───────┬─────────────────────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────────────────────────────┐
+│ Each tab initializes its UI and loads data:         │
+│  - CalendarApp: draw grid (turtle), load sessions   │
+│  - CourseTracker: read courses.json                 │
+│  - FlashcardApp: read flashcards.csv                │
+│  - NotesPanel: read notes_data.json via service     │
+│  - PomodoroApp: set timers (no I/O)                 │
+└───────┬─────────────────────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────────────────────────────┐
+│ Event Loop (root.mainloop):                         │
+│  - Button clicks, menu actions, right-clicks        │
+│  - Entry updates, list selections                   │
+│  - Timer ticks (Pomodoro via .after)                │
+└───────┬─────────────────────────────────────────────┘
+        │
+        ├──────────────┐  ┌───────────────┐  ┌────────────────┐
+        ▼              ▼  ▼               ▼  ▼                ▼
+[Calendar actions] [CourseTracker] [Flashcards/Quiz] [Pomodoro] [Notes]
+ add/edit/delete     add/del/hrs    add/edit/view/quiz   start/stop     create/update/
+ sessions import     save JSON      save & load CSV      after() loop   search/pin/export
+ .ics, export CSV                                                      via NotesService
+        │
+        ▼
+┌────────────────────────────────────────────────────┐
+│ Persist where needed (JSON/CSV), refresh the UI     │
+└────────────────────────────────────────────────────┘
