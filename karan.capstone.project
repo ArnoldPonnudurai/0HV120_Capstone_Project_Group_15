@@ -1,0 +1,109 @@
+from tkinter import *
+from tkinter import ttk, messagebox
+import json
+
+class CourseTracker(Frame):
+    def __init__(self, parent, data_path="courses.json"):
+        super().__init__(parent)
+        self.data_path = data_path
+        self.course_data = self.load_courses()
+
+        Label(self, text="Course Name:").grid(row=0, column=0, sticky="w", padx=10, pady=(12, 2))
+        self.entry_name = Entry(self, width=30)
+        self.entry_name.grid(row=1, column=0, sticky="w", padx=10)
+
+        Button(self, text="Add Course", command=self.add_course).grid(row=1, column=1, sticky="w", padx=8)
+        Button(self, text="Delete Selected", command=self.delete_selected).grid(row=1, column=2, sticky="w", padx=8)
+
+
+        Label(self, text="Add hours to selected").grid(row=2, column=0, sticky="w", padx=10, pady=(10, 2))
+        self.entry_hours = Entry(self, width=10)
+        self.entry_hours.insert(0, "1.0")
+        self.entry_hours.grid(row=2, column=1, sticky="w")
+        Button(self, text="Add Hours", command=self.add_hours_to_selected).grid(row=2, column=2, sticky="w", padx=8)
+
+        self.table = ttk.Treeview(self, columns=("Course", "Hours"), show="headings", height=10)
+        self.table.heading("Course", text="Course")
+        self.table.heading("Hours", text="Hours")
+        self.table.column("Course", width=260, anchor="w")
+        self.table.column("Hours", width=120, anchor="center")
+        self.table.grid(row=3, column=0, columnspan=4, padx=10, pady=(12, 12), sticky="w")
+
+        self.refresh_table()
+
+
+    def load_courses(self):
+        try:
+            with open(self.data_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+                fixed = {}
+                for name, info in data.items():
+                    hrs = float(info.get("hours", 0.0))
+                    fixed[name] = {"hours": hrs}
+                return fixed
+        except FileNotFoundError:
+            return {}
+
+
+    def save_courses(self):
+        with open(self.data_path, "w", encoding="utf-8") as f:
+            json.dump(self.course_data, f, indent=2)
+
+
+    def refresh_table(self):
+        for item in self.table.get_children():
+            self.table.delete(item)
+        for name, info in self.course_data.items():
+            hours = float(info.get("hours", 0.0))
+            self.table.insert("", "end", values=(name, f"{hours:.1f}"))
+
+
+    def add_course(self):
+        name = self.entry_name.get().strip()
+        if not name:
+            return
+        if name in self.course_data:
+            messagebox.showinfo("Duplicate", "Course already exists.")
+            return
+        self.course_data[name] = {"hours": 0.0}
+        self.save_courses()
+        self.entry_name.delete(0, END)
+        self.refresh_table()
+
+    def delete_selected(self):
+        selection = self.table.selection()
+        if not selection:
+            return
+        item_id = selection[0]
+        name = self.table.item(item_id, "values")[0]
+        self.course_data.pop(name, None)
+        self.save_courses()
+        self.refresh_table()
+
+    def add_hours_to_selected(self):
+        selection = self.table.selection()
+        if not selection:
+            return
+        item_id = selection[0]
+        name = self.table.item(item_id, "values")[0]
+        try:
+            extra = float(self.entry_hours.get())
+        except ValueError:
+            messagebox.showinfo("Invalid", "Type a number like 0.5 or 1.0")
+            return
+        self.course_data[name]["hours"] = float(self.course_data[name].get("hours", 0.0)) + extra
+        self.save_courses()
+        self.refresh_table()
+
+
+
+if __name__ == "__main__":
+    root = Tk()
+    root.title("Course Hour Tracking (Class + JSON)")
+    root.minsize(620, 420)
+
+    tracker = CourseTracker(root)
+    tracker.pack(fill="both", expand=True)
+
+    root.mainloop()
