@@ -1,0 +1,1041 @@
+# ------------------------------------------------------------
+# Personal Weekly Study Assistant (Single File, Reader Style)
+# R7: OOP classes            R8: Tkinter GUI + event loop
+# R9: Files (JSON/CSV)       Turtle used for calendar grid
+# ------------------------------------------------------------
+
+import os
+import csv
+import json
+import re
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog, simpledialog, colorchooser
+from datetime import datetime
+
+# Turtle must be imported after tkinter
+import turtle
+
+
+# ============================================================
+#                      WEEKLY CALENDAR
+# ============================================================
+class CalendarApp(tk.Frame):
+    """
+    R8 GUI with turtle drawing + R9 file I/O.
+    Shows a Mon–Fri time grid; lets you add sessions, import .ics, export CSV.
+    Right-click on a session to edit/delete.
+    """
+
+    DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    START_HOUR, END_HOUR = 8, 19
+    CELL_HEIGHT, CELL_WIDTH = 40, 120
+
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        self.sessions = []     # list of dicts: {course, day, start_time, end_time, color}
+        self.courses = {}      # course -> color
+
+        # -------- Controls (left) --------
+        left = tk.Frame(self)
+        left.pack(side=tk.LEFT, padx=10, pady=10, fill="y")
+
+        tk.Label(left, text="Course:").grid(row=0, column=0, sticky="w")
+        self.course_entry = tk.Entry(left, width=20)
+        self.course_entry.grid(row=0, column=1, sticky="w")
+        tk.Button(left, text="Choose Color", command=self._choose_color).grid(row=0, column=2, padx=6)
+
+        tk.Label(left, text="Day:").grid(row=1, column=0, sticky="w")
+        self.day_var = tk.StringVar(value=self.DAYS[0])
+        tk.OptionMenu(left, self.day_var, *self.DAYS).grid(row=1, column=1, sticky="w")
+
+        tk.Label(left, text="Start (HH:MM):").grid(row=2, column=0, sticky="w")
+        self.start_entry = tk.Entry(left, width=10)
+        self.start_entry.grid(row=2, column=1, sticky="w")
+
+        tk.Label(left, text="End (HH:MM):").grid(row=3, column=0, sticky="w")
+        self.end_entry = tk.Entry(left, width=10)
+        self.end_entry.grid(row=3, column=1, sticky="w")
+
+        tk.Button(left, text="Add Session", command=self._add_session).grid(row=4, column=0, columnspan=3, pady=6, sticky="we")
+        tk.Button(left, text="Import .ics", command=self._import_ics).grid(row=5, column=0, columnspan=3, pady=2, sticky="we")
+        tk.Button(left, text="Export CSV", command=self._export_csv).grid(row=6, column=0, columnspan=3, pady=2, sticky="we")
+
+        # -------- Turtle Canvas (right) --------
+        right = tk.Frame(self)
+        right.pack(side=tk.RIGHT, padx=6, pady=6, fill="both", expand=True)
+
+        self.canvas = tk.Canvas(right, width=800, height=600, bg="white")
+        self.canvas.pack(fill="both", expand=True)
+
+        self.screen = turtle.TurtleScreen(self.canvas)
+        self.screen.bgcolor("white")
+        self.t = turtle.RawTurtle(self.screen)
+        self.t.hideturtle()
+        self.t.speed(0)
+        self.t.penup()
+
+        self.canvas.bind("<Button-3>", self._show_context_menu)
+        self._draw_calendar()
+
+    # ---------- Helpers ----------
+    def _time_to_index(self, time_str: str) -> float:
+        t = datetime.strptime(time_str, "%H:%M")
+        return t.hour + t.minute / 60
+
+    def _auto_color(self, course: str) -> str:
+        h = abs(hash(course)) & 0xFFFFFF
+        return f"#{h:06x}"
+
+    # ---------- Actions ----------
+    def _choose_color(self):
+        course = self.course_entry.get().strip()
+        if not course:
+            return
+        color = colorchooser.askcolor(title=f"Choose color for {course}")[1]
+        if color:
+            self.courses[course] = color
+            self._draw_calendar()
+
+    def _add_session(self):
+        course = self.course_entry.get().strip()
+        day = self.day_var.get()
+        start = self.start_entry.get().strip()
+        end = self.end_entry.get().strip()
+        if not course or not start or not end:
+            messagebox.showerror("Missing data", "Course, start, and end are required.")
+            return
+        if course not in self.courses:
+            self.courses[course] = self._auto_color(course)
+        start_idx = self._time_to_index(start)
+        end_idx = self._time_to_index(end)
+        if end_idx - start_idx < 0.5:
+            messagebox.showerror("Error", "Session must be at least 30 minutes!")
+            return
+        self.sessions.append({
+            "course": course, "day": day,
+            "start_time": start, "end_time": end,
+            "color": self.courses[course]
+        })
+        self._draw_calendar()
+
+    def _import_ics(self):
+        path = filedialog.askopenfilename(filetypes=[("iCalendar Files", "*.ics")])
+        if not path:
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        events = re.findall(r'BEGIN:VEVENT(.*?)END:VEVENT', content, re.DOTALL)
+        added = 0
+        for e in events:
+            summary = re.search(r'^SUMMARY:(.*)', e, re.MULTILINE)
+            dtstart = re.search(r'^DTSTART(?:;[^:]*)?:(.*)', e, re.MULTILINE)
+            dtend = re.search(r'^DTEND(?:;[^:]*)?:(.*)', e, re.MULTILINE)
+            if not (summary and dtstart and dtend):
+                continue
+            summary = summary.group(1).strip()
+            s = dtstart.group(1).strip().rstrip('Z')
+            ed = dtend.group(1).strip().rstrip('Z')
+
+            for fmt in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M"):
+                try:
+                    start_dt = datetime.strptime(s, fmt)
+                    end_dt = datetime.strptime(ed, fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                continue
+
+            day_name = start_dt.strftime("%A")
+            if day_name not in self.DAYS:
+                continue
+            start_time = start_dt.strftime("%H:%M")
+            end_time = end_dt.strftime("%H:%M")
+
+            if summary not in self.courses:
+                self.courses[summary] = self._auto_color(summary)
+            self.sessions.append({
+                "course": summary, "day": day_name,
+                "start_time": start_time, "end_time": end_time,
+                "color": self.courses[summary]
+            })
+            added += 1
+
+        self._draw_calendar()
+        messagebox.showinfo("ICS Import", f"Imported {added} session(s).")
+
+    def _export_csv(self):
+        path = filedialog.asksaveasfilename(defaultextension=".csv")
+        if not path:
+            return
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["course", "day", "start_time", "end_time", "color"])
+            w.writeheader()
+            for s in self.sessions:
+                w.writerow(s)
+        messagebox.showinfo("CSV Export", f"Exported {len(self.sessions)} sessions.")
+
+    # ---------- Drawing ----------
+    def _draw_calendar(self):
+        t = self.t
+        t.clear()
+
+        num_days = len(self.DAYS)
+        num_hours = self.END_HOUR - self.START_HOUR + 1
+        cal_w = self.CELL_WIDTH * num_days
+        cal_h = self.CELL_HEIGHT * num_hours
+        start_x = -cal_w / 2
+        start_y = cal_h / 2
+
+        # Day headers
+        for i, day in enumerate(self.DAYS):
+            x = start_x + i * self.CELL_WIDTH + self.CELL_WIDTH / 2
+            y = start_y + 20
+            t.goto(x, y)
+            t.write(day, align="center", font=("Arial", 12, "bold"))
+
+        # Horizontal lines + hour labels
+        for h in range(self.START_HOUR, self.END_HOUR + 1):
+            y = start_y - (h - self.START_HOUR) * self.CELL_HEIGHT
+            t.goto(start_x - 10, y - self.CELL_HEIGHT / 2)
+            t.write(f"{h}:00", align="right", font=("Arial", 10))
+            t.goto(start_x, y)
+            t.pendown()
+            t.forward(cal_w)
+            t.penup()
+
+        # Vertical lines
+        for i in range(num_days := (num_days := num_days)):
+            pass  # noop quirky; keeps linter happy in some editors
+        for i in range(num_days + 1):
+            x = start_x + i * self.CELL_WIDTH
+            t.goto(x, start_y)
+            t.setheading(270)
+            t.pendown()
+            t.forward(cal_h)
+            t.penup()
+            t.setheading(0)
+
+        # Sessions
+        self._session_rects = []
+        for s in self.sessions:
+            if s["day"] not in self.DAYS:
+                continue
+            di = self.DAYS.index(s["day"])
+            si = self._time_to_index(s["start_time"])
+            ei = self._time_to_index(s["end_time"])
+            y_start = start_y - (si - self.START_HOUR) * self.CELL_HEIGHT
+            height = (ei - si) * self.CELL_HEIGHT
+            x_start = start_x + di * self.CELL_WIDTH
+
+            t.goto(x_start, y_start)
+            t.fillcolor(s["color"])
+            t.begin_fill()
+            for _ in range(2):
+                t.forward(self.CELL_WIDTH)
+                t.right(90)
+                t.forward(height)
+                t.right(90)
+            t.end_fill()
+
+            t.goto(x_start + self.CELL_WIDTH / 2, y_start - height / 2 + 5)
+            t.write(s["course"], align="center", font=("Arial", 10, "bold"))
+            self._session_rects.append((x_start, y_start, x_start + self.CELL_WIDTH, y_start - height, s))
+
+    # ---------- Context menu ----------
+    def _show_context_menu(self, event):
+        cx = event.x - self.canvas.winfo_width() / 2
+        cy = self.canvas.winfo_height() / 2 - event.y
+        for x1, y1, x2, y2, s in getattr(self, "_session_rects", []):
+            if x1 <= cx <= x2 and y2 <= cy <= y1:
+                m = tk.Menu(self, tearoff=0)
+                m.add_command(label="Edit", command=lambda sess=s: self._edit_session(sess))
+                m.add_command(label="Delete", command=lambda sess=s: self._delete_session(sess))
+                m.post(event.x_root, event.y_root)
+                return
+
+    def _edit_session(self, s):
+        win = tk.Toplevel(self)
+        win.title(f"Edit Session: {s['course']}")
+        tk.Label(win, text="Day:").grid(row=0, column=0)
+        day_var = tk.StringVar(value=s["day"])
+        tk.OptionMenu(win, day_var, *self.DAYS).grid(row=0, column=1)
+        tk.Label(win, text="Start (HH:MM):").grid(row=1, column=0)
+        e1 = tk.Entry(win); e1.insert(0, s["start_time"]); e1.grid(row=1, column=1)
+        tk.Label(win, text="End (HH:MM):").grid(row=2, column=0)
+        e2 = tk.Entry(win); e2.insert(0, s["end_time"]); e2.grid(row=2, column=1)
+
+        def save():
+            ns, ne = e1.get().strip(), e2.get().strip()
+            if self._time_to_index(ne) - self._time_to_index(ns) < 0.5:
+                messagebox.showerror("Error", "Session must be at least 30 minutes!")
+                return
+            s["day"] = day_var.get()
+            s["start_time"] = ns
+            s["end_time"] = ne
+            self._draw_calendar()
+            win.destroy()
+
+        tk.Button(win, text="Save", command=save).grid(row=3, column=0, columnspan=2)
+
+    def _delete_session(self, s):
+        if messagebox.askyesno("Delete", f"Delete '{s['course']}' on {s['day']}'?"):
+            self.sessions.remove(s)
+            self._draw_calendar()
+
+
+# ============================================================
+#                     COURSE HOUR TRACKING
+# ============================================================
+class CourseTracker(tk.Frame):
+    """
+    R7/R9: OOP + JSON persistence; R8: Tk widgets + events.
+    Tracks total self-study hours per course.
+    """
+
+    def __init__(self, parent, data_path="courses.json"):
+        super().__init__(parent)
+        self.data_path = data_path
+        self.course_data = self._load_courses()
+
+        tk.Label(self, text="Course Name:").grid(row=0, column=0, sticky="w", padx=10, pady=(12, 2))
+        self.entry_name = tk.Entry(self, width=30)
+        self.entry_name.grid(row=1, column=0, sticky="w", padx=10)
+
+        tk.Button(self, text="Add Course", command=self._add_course).grid(row=1, column=1, sticky="w", padx=8)
+        tk.Button(self, text="Delete Selected", command=self._delete_selected).grid(row=1, column=2, sticky="w", padx=8)
+
+        tk.Label(self, text="Add hours to selected").grid(row=2, column=0, sticky="w", padx=10, pady=(10, 2))
+        self.entry_hours = tk.Entry(self, width=10)
+        self.entry_hours.insert(0, "1.0")
+        self.entry_hours.grid(row=2, column=1, sticky="w")
+        tk.Button(self, text="Add Hours", command=self._add_hours_to_selected).grid(row=2, column=2, sticky="w", padx=8)
+
+        self.table = ttk.Treeview(self, columns=("Course", "Hours"), show="headings", height=12)
+        self.table.heading("Course", text="Course")
+        self.table.heading("Hours", text="Hours")
+        self.table.column("Course", width=260, anchor="w")
+        self.table.column("Hours", width=120, anchor="center")
+        self.table.grid(row=3, column=0, columnspan=4, padx=10, pady=(12, 12), sticky="nsew")
+
+        self.grid_rowconfigure(3, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        self._refresh_table()
+
+    # ---- persistence ----
+    def _load_courses(self):
+        try:
+            with open(self.data_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                fixed = {}
+                for name, info in data.items():
+                    hrs = float(info.get("hours", 0.0))
+                    fixed[name] = {"hours": hrs}
+                return fixed
+        except FileNotFoundError:
+            return {}
+
+    def _save_courses(self):
+        with open(self.data_path, "w", encoding="utf-8") as f:
+            json.dump(self.course_data, f, indent=2)
+
+    # ---- table ops ----
+    def _refresh_table(self):
+        for item in self.table.get_children():
+            self.table.delete(item)
+        for name, info in self.course_data.items():
+            hours = float(info.get("hours", 0.0))
+            self.table.insert("", "end", values=(name, f"{hours:.1f}"))
+
+    def _add_course(self):
+        name = self.entry_name.get().strip()
+        if not name:
+            return
+        if name in self.course_data:
+            messagebox.showinfo("Duplicate", "Course already exists.")
+            return
+        self.course_data[name] = {"hours": 0.0}
+        self._save_courses()
+        self.entry_name.delete(0, tk.END)
+        self._refresh_table()
+
+    def _delete_selected(self):
+        selection = self.table.selection()
+        if not selection:
+            return
+        item_id = selection[0]
+        name = self.table.item(item_id, "values")[0]
+        self.course_data.pop(name, None)
+        self._save_courses()
+        self._refresh_table()
+
+    def _add_hours_to_selected(self):
+        selection = self.table.selection()
+        if not selection:
+            return
+        item_id = selection[0]
+        name = self.table.item(item_id, "values")[0]
+        try:
+            extra = float(self.entry_hours.get())
+        except ValueError:
+            messagebox.showinfo("Invalid", "Type a number like 0.5 or 1.0")
+            return
+        self.course_data[name]["hours"] = float(self.course_data[name].get("hours", 0.0)) + extra
+        self._save_courses()
+        self._refresh_table()
+
+
+# ============================================================
+#                     FLASHCARDS & QUIZ
+# ============================================================
+class FlashcardApp(tk.Frame):
+    """
+    R8 GUI + R9 CSV file. Create/modify/list/delete flashcards + simple quiz.
+    """
+
+    def __init__(self, parent, csv_path="flashcards.csv"):
+        super().__init__(parent)
+        self.csv_path = csv_path
+        self.flashcards = []
+
+        tk.Label(self, text="Flashcards & Quiz", font=("Arial", 13, "bold")).pack(pady=10)
+        tk.Button(self, text="Make a flashcard", command=self._add_flashcard).pack()
+        tk.Button(self, text="Modify a flashcard", command=self._modify_flashcard).pack()
+        tk.Button(self, text="View flashcards", command=self._view_flashcards).pack()
+        tk.Button(self, text="Delete ALL flashcards", command=self._delete_all, fg="red").pack(pady=4)
+        tk.Button(self, text="Start quiz", command=self._start_quiz, fg="green").pack(pady=6)
+
+        self._load_csv()
+
+    # ---- CSV I/O ----
+    def _load_csv(self):
+        self.flashcards.clear()
+        if not os.path.exists(self.csv_path):
+            with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["Keyword", "Definition"])
+            return
+        with open(self.csv_path, newline="", encoding="utf-8") as f:
+            r = csv.reader(f)
+            for row in r:
+                if len(row) >= 2:
+                    self.flashcards.append({"keyword": row[0], "definition": row[1]})
+
+    def _save_csv(self):
+        with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            for c in self.flashcards:
+                w.writerow([c["keyword"], c["definition"]])
+
+    # ---- Actions ----
+    def _add_flashcard(self):
+        k = simpledialog.askstring("Input", "Enter a keyword", parent=self)
+        if k is None:
+            return
+        d = simpledialog.askstring("Input", "Enter a definition", parent=self)
+        if d is None:
+            return
+        self.flashcards.append({"keyword": k, "definition": d})
+        self._save_csv()
+
+    def _modify_flashcard(self):
+        k = simpledialog.askstring("Modify", "Keyword to modify", parent=self)
+        if k is None:
+            return
+        for card in self.flashcards:
+            if card["keyword"].lower() == k.lower():
+                nk = simpledialog.askstring("Modify", "New keyword", initialvalue=card["keyword"], parent=self)
+                nd = simpledialog.askstring("Modify", "New definition", initialvalue=card["definition"], parent=self)
+                if nk and nd:
+                    card["keyword"] = nk
+                    card["definition"] = nd
+                    self._save_csv()
+                    messagebox.showinfo("OK", f"Updated '{k}'")
+                return
+        messagebox.showerror("Not found", "No flashcard with that keyword.")
+
+    def _view_flashcards(self):
+        self._load_csv()
+        if not self.flashcards:
+            messagebox.showinfo("Empty", "No flashcards yet.")
+            return
+        win = tk.Toplevel(self)
+        win.title("All flashcards")
+        tk.Label(win, text="Your flashcards", font=("Arial", 16, "bold")).pack(pady=5)
+        for c in self.flashcards:
+            tk.Label(win, text=f"{c['keyword']}: {c['definition']}", anchor="w").pack(fill="x", padx=10)
+
+    def _delete_all(self):
+        if messagebox.askyesno("Confirm", "Delete ALL flashcards?"):
+            self.flashcards.clear()
+            self._save_csv()
+            messagebox.showinfo("Deleted", "All flashcards removed.")
+
+    def _start_quiz(self):
+        if not self.flashcards:
+            messagebox.showinfo("Empty", "Add some cards first.")
+            return
+
+        idx = 0
+        win = tk.Toplevel(self)
+        win.title("Quiz")
+        win.geometry("420x300")
+
+        qlbl = tk.Label(win, text="", font=("Arial", 12))
+        qlbl.pack(pady=20)
+
+        albl = tk.Label(win, text="", font=("Arial", 12))
+        albl.pack(pady=10)
+
+        def show():
+            nonlocal idx
+            card = self.flashcards[idx]
+            qlbl.config(text=f"keyword: {card['keyword']}")
+            albl.config(text="")
+
+        def reveal():
+            card = self.flashcards[idx]
+            albl.config(text=f"definition: {card['definition']}")
+
+        def next_():
+            nonlocal idx
+            idx += 1
+            if idx >= len(self.flashcards):
+                messagebox.showinfo("Done", f"You finished {len(self.flashcards)} cards!")
+                win.destroy()
+                return
+            show()
+
+        tk.Button(win, text="show answer", command=reveal).pack()
+        tk.Button(win, text="next", command=next_).pack()
+        tk.Button(win, text="stop quiz", command=win.destroy, fg="red").pack()
+        show()
+
+
+# ============================================================
+#                         POMODORO
+# ============================================================
+class PomodoroApp(tk.Frame):
+    """
+    R8: Tkinter + after() timer loop. Study/Break countdown with a visual arc.
+    """
+
+    STUDY_TIME = 25 * 60
+    BREAK_TIME = 5 * 60
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.timer = None
+        self.time_left = 0
+        self.is_running = False
+
+        tk.Label(self, text="Pomodoro Timer", font=("Arial", 18, "bold")).pack(pady=10)
+
+        self.canvas = tk.Canvas(self, width=260, height=260, bg="#FFF9E6", highlightthickness=0)
+        self.timer_arc = self.canvas.create_arc(10, 10, 250, 250, start=90, extent=0, fill="#FF6F61", outline="")
+        self.timer_text = self.canvas.create_text(130, 130, text="00:00", fill="black", font=("Arial", 35, "bold"))
+        self.canvas.pack()
+
+        self.lbl_status = tk.Label(self, text="Ready!", bg="#FFF9E6", font=("Arial", 12))
+        self.lbl_status.pack(pady=10)
+
+        btns = tk.Frame(self, bg="#FFF9E6")
+        btns.pack()
+        tk.Button(btns, text="Start Study", command=self.start_study, width=12, bg="#1FD655", fg="white").grid(row=0, column=0, padx=5)
+        tk.Button(btns, text="Start Break", command=self.start_break, width=12, bg="#1E90FF", fg="white").grid(row=0, column=1, padx=5)
+        tk.Button(self, text="Cancel", command=self.cancel_timer, width=26, bg="#FF0800", fg="white").pack(pady=10)
+
+        # Right-click the clock to start studying quickly
+        self.canvas.bind("<Button-3>", lambda e: self.start_study())
+
+    def start_study(self):
+        if self.is_running:
+            return
+        self.is_running = True
+        self.lbl_status.config(text="Study Time", fg="purple")
+        self.time_left = self.STUDY_TIME
+        self._tick()
+
+    def start_break(self):
+        if self.is_running:
+            return
+        self.is_running = True
+        self.lbl_status.config(text="Break Time", fg="purple")
+        self.time_left = self.BREAK_TIME
+        self._tick()
+
+    def _tick(self):
+        mins, secs = divmod(self.time_left, 60)
+        self.canvas.itemconfig(self.timer_text, text=f"{mins:02d}:{secs:02d}")
+
+        total = self.STUDY_TIME if "Study" in self.lbl_status.cget("text") else self.BREAK_TIME
+        progress = (1 - self.time_left / total) * 360 if total else 0
+        self.canvas.itemconfig(self.timer_arc, extent=progress)
+
+        if self.time_left > 0 and self.is_running:
+            self.time_left -= 1
+            self.timer = self.after(1000, self._tick)
+        elif self.is_running:
+            self.lbl_status.config(text="Done!")
+            self.is_running = False
+
+    def cancel_timer(self):
+        if self.timer:
+            self.after_cancel(self.timer)
+        self.is_running = False
+        self.time_left = 0
+        self.lbl_status.config(text="Timer Reset", fg="black")
+        self.canvas.itemconfig(self.timer_text, text="00:00")
+        self.canvas.itemconfig(self.timer_arc, extent=0)
+
+
+# ============================================================
+#                          NOTES
+# ============================================================
+class Note:
+    """R7: Simple object (no dataclasses)."""
+
+    def __init__(self, id, title, body, course, tags=None, pinned=False,
+                 day=None, session_start=None, session_duration=None):
+        self.id = id
+        self.title = title
+        self.body = body
+        self.course = course
+        self.tags = tags or []
+        self.pinned = pinned
+        self.day = day
+        self.session_start = session_start
+        self.session_duration = session_duration
+        self.created_at = datetime.now().isoformat()
+        self.updated_at = datetime.now().isoformat()
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "body": self.body,
+            "course": self.course,
+            "tags": self.tags,
+            "pinned": self.pinned,
+            "day": self.day,
+            "session_start": self.session_start,
+            "session_duration": self.session_duration,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+class NotesService:
+    """R9: JSON persistence + CRUD + search + CSV export."""
+
+    def __init__(self, data_file="notes_data.json"):
+        self._data_file = data_file
+        self._notes = {}     # id -> Note
+        self._next_id = 1
+        self._load()
+
+    # ---- persistence ----
+    def _load(self):
+        if not os.path.exists(self._data_file):
+            return
+        try:
+            with open(self._data_file, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception:
+            return
+
+        self._next_id = raw.get("_next_id", 1)
+        for row in raw.get("notes", []):
+            note = Note(
+                id=row["id"],
+                title=row["title"],
+                body=row.get("body", ""),
+                course=row.get("course", ""),
+                tags=row.get("tags", []),
+                pinned=row.get("pinned", False),
+                day=row.get("day"),
+                session_start=row.get("session_start"),
+                session_duration=row.get("session_duration"),
+            )
+            note.created_at = row.get("created_at", datetime.now().isoformat())
+            note.updated_at = row.get("updated_at", datetime.now().isoformat())
+            self._notes[note.id] = note
+
+    def _save(self):
+        data = {"_next_id": self._next_id, "notes": [n.to_dict() for n in self._notes.values()]}
+        with open(self._data_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    # ---- CRUD ----
+    def create_note(self, title, body, course, tags_text,
+                    day=None, session_start=None, session_duration=None):
+        note_id = self._next_id
+        self._next_id += 1
+        tags = self._parse_tags(tags_text)
+        note = Note(note_id, title, body, course, tags, pinned=False,
+                    day=day, session_start=session_start, session_duration=session_duration)
+        self._notes[note_id] = note
+        self._save()
+        return note
+
+    def update_note(self, note_id, title, body, course, tags_text, pinned,
+                    day=None, session_start=None, session_duration=None):
+        note = self._notes.get(note_id)
+        if not note:
+            return None
+        note.title = title
+        note.body = body
+        note.course = course
+        note.tags = self._parse_tags(tags_text)
+        note.pinned = bool(pinned)
+        note.day = day
+        note.session_start = session_start
+        note.session_duration = session_duration
+        note.updated_at = datetime.now().isoformat()
+        self._save()
+        return note
+
+    def delete_note(self, note_id):
+        if note_id in self._notes:
+            del self._notes[note_id]
+            self._save()
+            return True
+        return False
+
+    # ---- queries ----
+    def all_notes(self):
+        notes = list(self._notes.values())
+        notes.sort(key=lambda n: (not n.pinned, n.updated_at), reverse=False)
+        return notes
+
+    def search(self, keyword="", course="", tag=""):
+        keyword = (keyword or "").lower().strip()
+        course = (course or "").lower().strip()
+        tag = (tag or "").lower().strip()
+
+        result = []
+        for n in self._notes.values():
+            ok = True
+            if keyword and (keyword not in n.title.lower() and keyword not in n.body.lower()):
+                ok = False
+            if ok and course and course != (n.course or "").lower():
+                ok = False
+            if ok and tag and tag not in [t.lower() for t in n.tags]:
+                ok = False
+            if ok:
+                result.append(n)
+
+        result.sort(key=lambda n: (not n.pinned, n.updated_at), reverse=False)
+        return result
+
+    def toggle_pin(self, note_id):
+        n = self._notes.get(note_id)
+        if not n:
+            return None
+        n.pinned = not n.pinned
+        n.updated_at = datetime.now().isoformat()
+        self._save()
+        return n
+
+    def export_csv(self, filepath, notes_list):
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow([
+                "id", "title", "course", "day", "session_start", "session_duration",
+                "tags", "pinned", "created_at", "updated_at", "body"
+            ])
+            for n in notes_list:
+                w.writerow([
+                    n.id, n.title, n.course or "",
+                    n.day or "", n.session_start or "", n.session_duration or "",
+                    ";".join(n.tags),
+                    "yes" if n.pinned else "no",
+                    n.created_at, n.updated_at,
+                    (n.body or "").replace("\n", "\\n")
+                ])
+
+    # ---- helper ----
+    def _parse_tags(self, tags_text):
+        if not tags_text:
+            return []
+        raw = tags_text.replace(";", ",").split(",")
+        cleaned = []
+        for t in raw:
+            s = t.strip()
+            if s:
+                cleaned.append(s)
+        return cleaned
+
+
+class NotesPanel(tk.Frame):
+    """
+    R8 GUI: Listbox + form + bindings + status line.
+    """
+
+    def __init__(self, parent, service=None):
+        super().__init__(parent)
+        self.service = service or NotesService()
+
+        # Left list
+        left = tk.Frame(self)
+        left.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+
+        tk.Label(left, text="Notes (pinned first):", font="Arial 12 bold").pack(anchor="w")
+
+        self.listbox = tk.Listbox(left, height=22)
+        self.listbox.pack(side="left", fill="both", expand=True)
+        self.listbox.bind("<<ListboxSelect>>", self._on_select)
+
+        sb = tk.Scrollbar(left, command=self.listbox.yview)
+        sb.pack(side="right", fill="y")
+        self.listbox.config(yscrollcommand=sb.set)
+
+        # Right form
+        right = tk.Frame(self)
+        right.pack(side="right", fill="both", expand=True, padx=8, pady=8)
+
+        tk.Label(right, text="Title").grid(row=0, column=0, sticky="w")
+        self.title_var = tk.StringVar()
+        tk.Entry(right, textvariable=self.title_var, width=40).grid(row=0, column=1, sticky="we")
+
+        tk.Label(right, text="Course").grid(row=1, column=0, sticky="w")
+        self.course_var = tk.StringVar()
+        tk.Entry(right, textvariable=self.course_var, width=40).grid(row=1, column=1, sticky="we")
+
+        tk.Label(right, text="Tags (comma/semicolon)").grid(row=2, column=0, sticky="w")
+        self.tags_var = tk.StringVar()
+        tk.Entry(right, textvariable=self.tags_var, width=40).grid(row=2, column=1, sticky="we")
+
+        tk.Label(right, text="Day").grid(row=3, column=0, sticky="w")
+        self.day_var = tk.StringVar(value="")
+        tk.OptionMenu(right, self.day_var, "", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday").grid(row=3, column=1, sticky="w")
+
+        sess = tk.Frame(right)
+        sess.grid(row=4, column=0, columnspan=2, sticky="we", pady=(2, 4))
+        tk.Label(sess, text="Start (HH:MM)").pack(side="left")
+        self.sstart_var = tk.StringVar()
+        tk.Entry(sess, textvariable=self.sstart_var, width=10).pack(side="left", padx=4)
+        tk.Label(sess, text="Duration (min)").pack(side="left")
+        self.sdur_var = tk.StringVar()
+        tk.Entry(sess, textvariable=self.sdur_var, width=10).pack(side="left", padx=4)
+
+        self.pin_var = tk.IntVar()
+        tk.Checkbutton(right, text="Pinned", variable=self.pin_var).grid(row=5, column=1, sticky="w")
+
+        tk.Label(right, text="Body").grid(row=6, column=0, sticky="nw")
+        self.body_txt = tk.Text(right, width=40, height=12)
+        self.body_txt.grid(row=6, column=1, sticky="we")
+
+        btns = tk.Frame(right)
+        btns.grid(row=7, column=0, columnspan=2, pady=6, sticky="we")
+        tk.Button(btns, text="New", command=self._new_note, width=10).pack(side="left", padx=3)
+        tk.Button(btns, text="Save", command=self._save_note, width=10).pack(side="left", padx=3)
+        tk.Button(btns, text="Delete", command=self._delete_note, width=10).pack(side="left", padx=3)
+        tk.Button(btns, text="Pin/Unpin", command=self._pin_toggle, width=10).pack(side="left", padx=3)
+        tk.Button(btns, text="Import .txt", command=self._import_txt, width=12).pack(side="left", padx=3)
+        tk.Button(btns, text="Export CSV", command=self._export_csv, width=12).pack(side="left", padx=3)
+
+        search = tk.LabelFrame(right, text="Search")
+        search.grid(row=8, column=0, columnspan=2, pady=6, sticky="we")
+        tk.Label(search, text="Keyword").grid(row=0, column=0, sticky="w")
+        self.kw_var = tk.StringVar()
+        tk.Entry(search, textvariable=self.kw_var, width=18).grid(row=0, column=1, sticky="w", padx=4)
+        tk.Label(search, text="Course").grid(row=0, column=2, sticky="w")
+        self.scourse_var = tk.StringVar()
+        tk.Entry(search, textvariable=self.scourse_var, width=12).grid(row=0, column=3, sticky="w", padx=4)
+        tk.Label(search, text="Tag").grid(row=0, column=4, sticky="w")
+        self.stag_var = tk.StringVar()
+        tk.Entry(search, textvariable=self.stag_var, width=12).grid(row=0, column=5, sticky="w", padx=4)
+        tk.Button(search, text="Search", command=self._do_search, width=10).grid(row=0, column=6, padx=6)
+        tk.Button(search, text="Clear", command=self._clear_search, width=10).grid(row=0, column=7, padx=2)
+
+        self.status = tk.StringVar(value="Ready.")
+        tk.Label(right, textvariable=self.status, anchor="w", relief="sunken").grid(row=9, column=0, columnspan=2, sticky="we", pady=(8, 0))
+
+        self._current_id = None
+        self._refresh_list(self.service.all_notes())
+
+    # ---- utilities ----
+    def _read_body(self):
+        return self.body_txt.get("1.0", "end-1c")
+
+    def _set_body(self, text):
+        self.body_txt.delete("1.0", tk.END)
+        self.body_txt.insert("1.0", text)
+
+    def _refresh_list(self, notes):
+        self.listbox.delete(0, tk.END)
+        for n in notes:
+            prefix = "📌 " if n.pinned else ""
+            display = f"{prefix}{n.id} | {n.title}  [{n.course or '-'}]"
+            self.listbox.insert(tk.END, display)
+        self.status.set(f"Loaded {len(notes)} note(s).")
+
+    def _current_selection_id(self):
+        sel = self.listbox.curselection()
+        if not sel:
+            return None
+        text = self.listbox.get(sel[0])
+        left = text.split("|", 1)[0]
+        num = "".join([ch for ch in left if ch.isdigit()])
+        return int(num) if num else None
+
+    # ---- bindings/work ----
+    def _on_select(self, _event):
+        note_id = self._current_selection_id()
+        if note_id is None:
+            return
+        found = None
+        for n in self.service.all_notes():
+            if n.id == note_id:
+                found = n
+                break
+        if not found:
+            return
+        self._current_id = found.id
+        self.title_var.set(found.title or "")
+        self.course_var.set(found.course or "")
+        self.tags_var.set(", ".join(found.tags) if found.tags else "")
+        self.pin_var.set(1 if found.pinned else 0)
+        self.day_var.set(found.day or "")
+        self.sstart_var.set(found.session_start or "")
+        self.sdur_var.set("" if found.session_duration is None else str(found.session_duration))
+        self._set_body(found.body or "")
+        self.status.set(f"Selected note #{found.id}")
+
+    def _new_note(self):
+        self._current_id = None
+        self.title_var.set("")
+        self.course_var.set("")
+        self.tags_var.set("")
+        self.pin_var.set(0)
+        self.day_var.set("")
+        self.sstart_var.set("")
+        self.sdur_var.set("")
+        self._set_body("")
+        self.status.set("New note…")
+
+    def _save_note(self):
+        title = self.title_var.get().strip()
+        body = self._read_body().strip()
+        course = self.course_var.get().strip()
+        tags_text = self.tags_var.get()
+        day = self.day_var.get().strip() or None
+        sstart = self.sstart_var.get().strip() or None
+        sdur = self.sdur_var.get().strip() or None
+
+        if not title:
+            messagebox.showwarning("Missing title", "Please enter a title.")
+            return
+
+        if self._current_id is None:
+            note = self.service.create_note(title, body, course, tags_text, day, sstart, sdur)
+            self._current_id = note.id
+            self.status.set(f"Created note #{note.id}")
+        else:
+            pinned = self.pin_var.get()
+            note = self.service.update_note(self._current_id, title, body, course, tags_text, pinned, day, sstart, sdur)
+            if note:
+                self.status.set(f"Updated note #{note.id}")
+            else:
+                self.status.set("Update failed (not found).")
+
+        self._refresh_list(self.service.all_notes())
+
+    def _delete_note(self):
+        if self._current_id is None:
+            messagebox.showinfo("No selection", "Select a note first.")
+            return
+        if not messagebox.askyesno("Delete", "Are you sure you want to delete this note?"):
+            return
+        self.service.delete_note(self._current_id)
+        self._new_note()
+        self._refresh_list(self.service.all_notes())
+        self.status.set("Note deleted.")
+
+    def _pin_toggle(self):
+        if self._current_id is None:
+            messagebox.showinfo("No selection", "Select a note first.")
+            return
+        n = self.service.toggle_pin(self._current_id)
+        if not n:
+            self.status.set("Pin toggle failed.")
+            return
+        self.pin_var.set(1 if n.pinned else 0)
+        self._refresh_list(self.service.all_notes())
+        self.status.set(f"{'Pinned' if n.pinned else 'Unpinned'} note #{n.id}")
+
+    def _do_search(self):
+        res = self.service.search(
+            keyword=self.kw_var.get(),
+            course=self.scourse_var.get(),
+            tag=self.stag_var.get(),
+        )
+        self._refresh_list(res)
+        self.status.set(f"Search results: {len(res)} note(s).")
+
+    def _clear_search(self):
+        self.kw_var.set("")
+        self.scourse_var.set("")
+        self.stag_var.set("")
+        self._refresh_list(self.service.all_notes())
+        self.status.set("Search cleared.")
+
+    def _export_csv(self):
+        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")], title="Export notes to CSV")
+        if not path:
+            return
+        ids = []
+        for i in range(self.listbox.size()):
+            line = self.listbox.get(i)
+            num = "".join([ch for ch in line.split("|", 1)[0] if ch.isdigit()])
+            if num:
+                ids.append(int(num))
+        notes = []
+        all_map = {n.id: n for n in self.service.all_notes()}
+        for nid in ids:
+            if nid in all_map:
+                notes.append(all_map[nid])
+        self.service.export_csv(path, notes)
+        self.status.set(f"Exported {len(notes)} note(s) to CSV.")
+
+    def _import_txt(self):
+        path = filedialog.askopenfilename(title="Import .txt into body", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+            cur = self._read_body()
+            combined = (cur + ("\n" if cur else "") + content).strip()
+            self._set_body(combined)
+            self.status.set("Imported .txt into body.")
+        except Exception as e:
+            messagebox.showerror("Import error", str(e))
+
+
+# ============================================================
+#                         MAIN WINDOW
+# ============================================================
+class StudyAssistantApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Personal Weekly Study Assistant")
+        self.geometry("1100x750")
+
+        nb = ttk.Notebook(self)
+        nb.pack(expand=True, fill="both")
+
+        nb.add(CalendarApp(nb), text="Weekly Calendar")
+        nb.add(CourseTracker(nb), text="Course Tracker")
+        nb.add(FlashcardApp(nb), text="Flashcards & Quiz")
+        nb.add(PomodoroApp(nb), text="Pomodoro Timer")
+        nb.add(NotesPanel(nb), text="Notes System")
+
+
+if __name__ == "__main__":
+    app = StudyAssistantApp()
+    app.mainloop()
