@@ -296,36 +296,36 @@ class CourseTracker(tk.Frame):
     """
 
     def __init__(self, parent, data_path="courses.json"):
+# initializes tab in mainframe
         super().__init__(parent)
         self.data_path = data_path
         self.course_data = self._load_courses()
-
+#UI-layout
         tk.Label(self, text="Course Name:").grid(row=0, column=0, sticky="w", padx=10, pady=(12, 2))
         self.entry_name = tk.Entry(self, width=30)
         self.entry_name.grid(row=1, column=0, sticky="w", padx=10)
-
+# adding/deleting courses
         tk.Button(self, text="Add Course", command=self._add_course).grid(row=1, column=1, sticky="w", padx=8)
         tk.Button(self, text="Delete Selected", command=self._delete_selected).grid(row=1, column=2, sticky="w", padx=8)
-
+# button to adjust hours for chosen course
         tk.Label(self, text="Add hours to selected").grid(row=2, column=0, sticky="w", padx=10, pady=(10, 2))
         self.entry_hours = tk.Entry(self, width=10)
         self.entry_hours.insert(0, "1.0")
         self.entry_hours.grid(row=2, column=1, sticky="w")
         tk.Button(self, text="Add Hours", command=self._add_hours_to_selected).grid(row=2, column=2, sticky="w", padx=8)
-
+# table displaying all courses with overview over hours
         self.table = ttk.Treeview(self, columns=("Course", "Hours"), show="headings", height=12)
         self.table.heading("Course", text="Course")
         self.table.heading("Hours", text="Hours")
         self.table.column("Course", width=260, anchor="w")
         self.table.column("Hours", width=120, anchor="center")
         self.table.grid(row=3, column=0, columnspan=4, padx=10, pady=(12, 12), sticky="nsew")
-
+# allows configuration of table to stay intact when window is resized
         self.grid_rowconfigure(3, weight=1)
         self.grid_columnconfigure(0, weight=1)
-
+# data configuration
         self._refresh_table()
-
-    # ---- persistence ----
+# persistance - when there is no data show empty
     def _load_courses(self):
         try:
             with open(self.data_path, "r", encoding="utf-8") as f:
@@ -337,19 +337,19 @@ class CourseTracker(tk.Frame):
                 return fixed
         except FileNotFoundError:
             return {}
-
+# save progress
     def _save_courses(self):
-        with open(self.data_path, "w", encoding="utf-8") as f:
+      with open(self.data_path, "w", encoding="utf-8") as f:
             json.dump(self.course_data, f, indent=2)
 
-    # ---- table ops ----
+# update table to refresh old data
     def _refresh_table(self):
         for item in self.table.get_children():
             self.table.delete(item)
         for name, info in self.course_data.items():
             hours = float(info.get("hours", 0.0))
             self.table.insert("", "end", values=(name, f"{hours:.1f}"))
-
+# add course 
     def _add_course(self):
         name = self.entry_name.get().strip()
         if not name:
@@ -357,21 +357,22 @@ class CourseTracker(tk.Frame):
         if name in self.course_data:
             messagebox.showinfo("Duplicate", "Course already exists.")
             return
+# let courses be added with 0 hours
         self.course_data[name] = {"hours": 0.0}
         self._save_courses()
         self.entry_name.delete(0, tk.END)
         self._refresh_table()
-
+# delete courses
     def _delete_selected(self):
         selection = self.table.selection()
         if not selection:
             return
         item_id = selection[0]
-        name = self.table.item(item_id, "values")[0]
-        self.course_data.pop(name, None)
-        self._save_courses()
-        self._refresh_table()
-
+        name = self.table.item(item_id, "values")[0] #course name
+        self.course_data.pop(name, None)             # remove from memory
+        self._save_courses()                         # save change
+        self._refresh_table()                        # update data
+# add hours to the course selected
     def _add_hours_to_selected(self):
         selection = self.table.selection()
         if not selection:
