@@ -1,0 +1,249 @@
+import tkinter as tk
+from tkinter import messagebox, colorchooser, simpledialog, filedialog
+import turtle
+from datetime import datetime
+import csv
+import re
+
+# --- Global Data Structures ---
+sessions = []  # Each session: dict with {course, day, start_time, end_time, color}
+courses = {}   # course_name: color
+
+DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+START_HOUR = 8
+END_HOUR = 19
+CELL_HEIGHT = 40
+CELL_WIDTH = 120
+
+# --- Helper Functions ---
+def time_to_index(time_str):
+    t = datetime.strptime(time_str, "%H:%M")
+    return t.hour + t.minute / 60
+
+def add_session(course, day, start, end):
+    if course not in courses:
+        courses[course] = "#"+''.join([f"{hex(ord(c))[2:]}" for c in course[:3]])  # auto color
+    start_idx = time_to_index(start)
+    end_idx = time_to_index(end)
+    if end_idx - start_idx < 0.5:
+        messagebox.showerror("Error", "Session must be at least 30 minutes!")
+        return
+    sessions.append({
+        "course": course,
+        "day": day,
+        "start_time": start,
+        "end_time": end,
+        "color": courses[course]
+    })
+    draw_calendar()
+
+def choose_color(course):
+    color_code = colorchooser.askcolor(title=f"Choose color for {course}")[1]
+    if color_code:
+        courses[course] = color_code
+
+# --- .ICS Import ---
+def import_ics():
+    file_path = filedialog.askopenfilename(filetypes=[("iCalendar Files", "*.ics")])
+    if not file_path:
+        return
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    events = re.findall(r'BEGIN:VEVENT(.*?)END:VEVENT', content, re.DOTALL)
+    for e in events:
+        summary_match = re.search(r'SUMMARY:(.*)', e)
+        dtstart_match = re.search(r'DTSTART(?:;[^:]*)?:(.*)', e)
+        dtend_match = re.search(r'DTEND(?:;[^:]*)?:(.*)', e)
+        if summary_match and dtstart_match and dtend_match:
+            summary = summary_match.group(1)
+            dtstart = dtstart_match.group(1)
+            dtend = dtend_match.group(1)
+
+            # Convert to datetime
+            fmt = "%Y%m%dT%H%M%S"
+            try:
+                start_dt = datetime.strptime(dtstart[:15], fmt)
+                end_dt = datetime.strptime(dtend[:15], fmt)
+            except:
+                continue
+
+            # Only import weekdays Monday-Friday
+            day_name = start_dt.strftime("%A")
+            if day_name not in DAYS:
+                continue
+            start_time = start_dt.strftime("%H:%M")
+            end_time = end_dt.strftime("%H:%M")
+            add_session(summary, day_name, start_time, end_time)
+
+    messagebox.showinfo("ICS Import", "Import complete.")
+
+# --- CSV Export ---
+def export_csv():
+    file_path = filedialog.asksaveasfilename(defaultextension=".csv")
+    if not file_path:
+        return
+    with open(file_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=["course", "day", "start_time", "end_time", "color"])
+        writer.writeheader()
+        for s in sessions:
+            writer.writerow(s)
+    messagebox.showinfo("CSV Export", f"Exported {len(sessions)} sessions to {file_path}")
+
+# --- Turtle Drawing ---
+def draw_calendar():
+    t.clear()
+    num_days = len(DAYS)
+    num_hours = END_HOUR - START_HOUR + 1
+    calendar_width = CELL_WIDTH * num_days
+    calendar_height = CELL_HEIGHT * num_hours
+
+    start_x = -calendar_width/2
+    start_y = calendar_height/2
+
+    for i, day in enumerate(DAYS):
+        x = start_x + i * CELL_WIDTH + CELL_WIDTH/2
+        y = start_y + 20
+        t.goto(x, y)
+        t.write(day, align="center", font=("Arial", 12, "bold"))
+
+    for h in range(START_HOUR, END_HOUR+1):
+        y = start_y - (h - START_HOUR) * CELL_HEIGHT
+        t.goto(start_x - 10, y - CELL_HEIGHT/2)
+        t.write(f"{h}:00", align="right", font=("Arial", 10, "normal"))
+        t.goto(start_x, y)
+        t.pendown()
+        t.forward(calendar_width)
+        t.penup()
+
+    for i in range(num_days+1):
+        x = start_x + i * CELL_WIDTH
+        t.goto(x, start_y)
+        t.setheading(270)
+        t.pendown()
+        t.forward(calendar_height)
+        t.penup()
+        t.setheading(0)
+
+    t.session_rects = []
+    for s in sessions:
+        if s["day"] not in DAYS:
+            continue
+        day_idx = DAYS.index(s["day"])
+        start_idx = time_to_index(s["start_time"])
+        end_idx = time_to_index(s["end_time"])
+        y_start = start_y - (start_idx - START_HOUR)*CELL_HEIGHT
+        height = (end_idx - start_idx)*CELL_HEIGHT
+        x_start = start_x + day_idx * CELL_WIDTH
+
+        t.goto(x_start, y_start)
+        t.fillcolor(s["color"])
+        t.begin_fill()
+        for _ in range(2):
+            t.forward(CELL_WIDTH)
+            t.right(90)
+            t.forward(height)
+            t.right(90)
+        t.end_fill()
+        t.goto(x_start + CELL_WIDTH/2, y_start - height/2 + 5)
+        t.write(s["course"], align="center", font=("Arial", 10, "bold"))
+        x1, y1 = x_start, y_start
+        x2, y2 = x_start + CELL_WIDTH, y_start - height
+        t.session_rects.append((x1, y1, x2, y2, s))
+
+# --- Right-click Menu ---
+def show_context_menu(event):
+    canvas_x = event.x - canvas.winfo_width()/2
+    canvas_y = canvas.winfo_height()/2 - event.y
+    for x1, y1, x2, y2, s in getattr(t, "session_rects", []):
+        if x1 <= canvas_x <= x2 and y2 <= canvas_y <= y1:
+            menu = tk.Menu(root, tearoff=0)
+            menu.add_command(label="Edit", command=lambda sess=s: edit_session(sess))
+            menu.add_command(label="Delete", command=lambda sess=s: delete_session(sess))
+            menu.post(event.x_root, event.y_root)
+            return
+
+def edit_session(s):
+    edit_win = tk.Toplevel(root)
+    edit_win.title(f"Edit Session: {s['course']}")
+
+    tk.Label(edit_win, text="Day:").grid(row=0, column=0)
+    day_var = tk.StringVar(value=s["day"])
+    day_menu = tk.OptionMenu(edit_win, day_var, *DAYS)
+    day_menu.grid(row=0, column=1)
+
+    tk.Label(edit_win, text="Start Time (HH:MM):").grid(row=1, column=0)
+    start_entry = tk.Entry(edit_win)
+    start_entry.insert(0, s["start_time"])
+    start_entry.grid(row=1, column=1)
+
+    tk.Label(edit_win, text="End Time (HH:MM):").grid(row=2, column=0)
+    end_entry = tk.Entry(edit_win)
+    end_entry.insert(0, s["end_time"])
+    end_entry.grid(row=2, column=1)
+
+    def save_changes():
+        new_day = day_var.get()
+        new_start = start_entry.get()
+        new_end = end_entry.get()
+        if time_to_index(new_end) - time_to_index(new_start) < 0.5:
+            messagebox.showerror("Error", "Session must be at least 30 minutes!")
+            return
+        s["day"] = new_day
+        s["start_time"] = new_start
+        s["end_time"] = new_end
+        draw_calendar()
+        edit_win.destroy()
+
+    tk.Button(edit_win, text="Save", command=save_changes).grid(row=3, column=0, columnspan=2)
+
+def delete_session(s):
+    if messagebox.askyesno("Delete Session", f"Delete session '{s['course']}' on {s['day']}?"):
+        sessions.remove(s)
+        draw_calendar()
+
+# --- Tkinter GUI ---
+root = tk.Tk()
+root.title("Weekly Study Assistant")
+
+frame = tk.Frame(root)
+frame.pack(side=tk.LEFT, padx=10, pady=10)
+
+tk.Label(frame, text="Course:").grid(row=0, column=0)
+course_entry = tk.Entry(frame)
+course_entry.grid(row=0, column=1)
+tk.Button(frame, text="Choose Color", command=lambda: choose_color(course_entry.get())).grid(row=0, column=2)
+
+tk.Label(frame, text="Day:").grid(row=1, column=0)
+day_var = tk.StringVar(value=DAYS[0])
+day_menu = tk.OptionMenu(frame, day_var, *DAYS)
+day_menu.grid(row=1, column=1)
+
+tk.Label(frame, text="Start (HH:MM):").grid(row=2, column=0)
+start_entry = tk.Entry(frame)
+start_entry.grid(row=2, column=1)
+
+tk.Label(frame, text="End (HH:MM):").grid(row=3, column=0)
+end_entry = tk.Entry(frame)
+end_entry.grid(row=3, column=1)
+
+tk.Button(frame, text="Add Session", command=lambda: add_session(course_entry.get(), day_var.get(), start_entry.get(), end_entry.get())).grid(row=4, column=0, columnspan=2)
+
+tk.Button(frame, text="Import .ics", command=import_ics).grid(row=5, column=0, columnspan=2, pady=5)
+tk.Button(frame, text="Export CSV", command=export_csv).grid(row=6, column=0, columnspan=2, pady=5)
+
+# Turtle Canvas
+canvas = tk.Canvas(root, width=800, height=600)
+canvas.pack(side=tk.RIGHT)
+screen = turtle.TurtleScreen(canvas)
+screen.bgcolor("white")
+t = turtle.RawTurtle(screen)
+t.hideturtle()
+t.speed(0)
+t.penup()
+
+canvas.bind("<Button-3>", show_context_menu)
+
+draw_calendar()
+root.mainloop()
+
