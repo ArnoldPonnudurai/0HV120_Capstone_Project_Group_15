@@ -393,15 +393,15 @@ class CourseTracker(tk.Frame):
 #                     FLASHCARDS & QUIZ
 # ============================================================
 class FlashcardApp(tk.Frame):
-    """
-    R8 GUI + R9 CSV file. Create/modify/list/delete flashcards + simple quiz.
-    """
+    """Flashcard app: lets users create, edit, view, delete, and quiz themselves."""
 
     def __init__(self, parent, csv_path="flashcards.csv"):
+        """Initialize the flashcard app inside a Tkinter frame."""
         super().__init__(parent)
-        self.csv_path = csv_path
-        self.flashcards = []
+        self.csv_path = csv_path              # Path of the CSV file used to store flashcards
+        self.flashcards = []                  # List that holds all flashcards as dictionaries
 
+        # --- Interface setup ---
         tk.Label(self, text="Flashcards & Quiz", font=("Arial", 13, "bold")).pack(pady=10)
         tk.Button(self, text="Make a flashcard", command=self._add_flashcard).pack()
         tk.Button(self, text="Modify a flashcard", command=self._modify_flashcard).pack()
@@ -409,111 +409,130 @@ class FlashcardApp(tk.Frame):
         tk.Button(self, text="Delete ALL flashcards", command=self._delete_all, fg="red").pack(pady=4)
         tk.Button(self, text="Start quiz", command=self._start_quiz, fg="green").pack(pady=6)
 
-        self._load_csv()
+        self._load_csv()  # Load saved flashcards when the app starts
 
     # ---- CSV I/O ----
     def _load_csv(self):
-        self.flashcards.clear()
+        """Load all flashcards from the CSV file, or create one if it doesn’t exist."""
+        self.flashcards.clear()  # Clear current list before reloading
         if not os.path.exists(self.csv_path):
+            # Create a new CSV with a header row if missing
             with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow(["Keyword", "Definition"])
+                csv.writer(f).writerow(["Keyword", "Definition"])
             return
+        # Read each row and store it as a dictionary
         with open(self.csv_path, newline="", encoding="utf-8") as f:
-            r = csv.reader(f)
-            for row in r:
+            for row in csv.reader(f):
                 if len(row) >= 2:
                     self.flashcards.append({"keyword": row[0], "definition": row[1]})
 
     def _save_csv(self):
+        """Save the flashcards list to the CSV file."""
         with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             for c in self.flashcards:
                 w.writerow([c["keyword"], c["definition"]])
 
-    # ---- Actions ----
+    # ---- FLASHCARD ACTIONS ----
     def _add_flashcard(self):
+        """Add a new flashcard by asking for a keyword and definition."""
         k = simpledialog.askstring("Input", "Enter a keyword", parent=self)
-        if k is None:
-            return
+        if not k: return  # Cancelled
         d = simpledialog.askstring("Input", "Enter a definition", parent=self)
-        if d is None:
-            return
-        self.flashcards.append({"keyword": k, "definition": d})
-        self._save_csv()
+        if not d: return
+        self.flashcards.append({"keyword": k, "definition": d})  # Add to list
+        self._save_csv()  # Save immediately to keep data persistent
+        messagebox.showinfo("Added", f"Flashcard '{k}' added successfully!")
 
     def _modify_flashcard(self):
+        """Find an existing flashcard and update its keyword or definition."""
         k = simpledialog.askstring("Modify", "Keyword to modify", parent=self)
-        if k is None:
-            return
+        if not k: return
         for card in self.flashcards:
             if card["keyword"].lower() == k.lower():
+                # Ask for new keyword/definition, showing existing ones
                 nk = simpledialog.askstring("Modify", "New keyword", initialvalue=card["keyword"], parent=self)
                 nd = simpledialog.askstring("Modify", "New definition", initialvalue=card["definition"], parent=self)
                 if nk and nd:
-                    card["keyword"] = nk
-                    card["definition"] = nd
+                    card.update({"keyword": nk, "definition": nd})
                     self._save_csv()
-                    messagebox.showinfo("OK", f"Updated '{k}'")
+                    messagebox.showinfo("Updated", f"'{k}' has been updated.")
                 return
         messagebox.showerror("Not found", "No flashcard with that keyword.")
 
     def _view_flashcards(self):
-        self._load_csv()
+        """Open a window listing all flashcards."""
+        self._load_csv()  # Reload latest data
         if not self.flashcards:
             messagebox.showinfo("Empty", "No flashcards yet.")
             return
         win = tk.Toplevel(self)
         win.title("All flashcards")
-        tk.Label(win, text="Your flashcards", font=("Arial", 16, "bold")).pack(pady=5)
+        tk.Label(win, text="Your Flashcards", font=("Arial", 16, "bold")).pack(pady=5)
+        # Display each keyword and definition
         for c in self.flashcards:
             tk.Label(win, text=f"{c['keyword']}: {c['definition']}", anchor="w").pack(fill="x", padx=10)
 
     def _delete_all(self):
+        """Delete all flashcards after user confirmation."""
         if messagebox.askyesno("Confirm", "Delete ALL flashcards?"):
             self.flashcards.clear()
             self._save_csv()
             messagebox.showinfo("Deleted", "All flashcards removed.")
 
+    # ---- QUIZ MODE ----
     def _start_quiz(self):
+        """Start the flashcard quiz in a new window."""
         if not self.flashcards:
             messagebox.showinfo("Empty", "Add some cards first.")
             return
 
-        idx = 0
+        index = 0  # Keeps track of current flashcard
+        total = len(self.flashcards)
+
         win = tk.Toplevel(self)
         win.title("Quiz")
         win.geometry("420x300")
 
-        qlbl = tk.Label(win, text="", font=("Arial", 12))
-        qlbl.pack(pady=20)
-
-        albl = tk.Label(win, text="", font=("Arial", 12))
-        albl.pack(pady=10)
+        label1 = tk.Label(win, text="", font=("Arial", 12))  # Shows the keyword
+        label1.pack(pady=20)
+        label2 = tk.Label(win, text="", font=("Arial", 12))  # Shows the definition when revealed
+        label2.pack(pady=10)
 
         def show():
-            nonlocal idx
-            card = self.flashcards[idx]
-            qlbl.config(text=f"keyword: {card['keyword']}")
-            albl.config(text="")
+            """Display the current keyword."""
+            card = self.flashcards[index]
+            label1.config(text=f"Keyword {index + 1}/{total}: {card['keyword']}")
+            label2.config(text="")
 
         def reveal():
-            card = self.flashcards[idx]
-            albl.config(text=f"definition: {card['definition']}")
+            """Reveal the definition of the current flashcard."""
+            card = self.flashcards[index]
+            label2.config(text=f"Definition: {card['definition']}")
 
         def next_():
-            nonlocal idx
-            idx += 1
-            if idx >= len(self.flashcards):
-                messagebox.showinfo("Done", f"You finished {len(self.flashcards)} cards!")
+            """Move to the next flashcard or finish the quiz."""
+            nonlocal index
+            index += 1
+            if index >= total:
+                messagebox.showinfo("Done", f"You finished all {total} flashcards!")
                 win.destroy()
-                return
-            show()
+            else:
+                show()
 
-        tk.Button(win, text="show answer", command=reveal).pack()
-        tk.Button(win, text="next", command=next_).pack()
-        tk.Button(win, text="stop quiz", command=win.destroy, fg="red").pack()
-        show()
+        def stop_quiz():
+            """Stop the quiz early after confirmation."""
+            if messagebox.askyesno("Confirm", "Stop quiz?"):
+                messagebox.showinfo("Quiz finished", f"You stopped at flashcard {index + 1} of {total}")
+                win.destroy()
+
+        # Quiz control buttons
+        tk.Button(win, text="Show answer", command=reveal).pack()
+        tk.Button(win, text="Next", command=next_).pack()
+        tk.Button(win, text="Stop quiz", command=stop_quiz, fg="red").pack()
+
+        show()  # Start quiz with the first flashcard
+
 
 
 # ============================================================
