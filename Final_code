@@ -538,39 +538,47 @@ class FlashcardApp(tk.Frame):
 # ============================================================
 #                         POMODORO
 # ============================================================
+# class makes it modular so the timer can beb inside a bigger app. 
 class PomodoroApp(tk.Frame):
     """
     R8: Tkinter + after() timer loop. Study/Break countdown with a visual arc.
     """
 
+# sets time for break and study, stored in seconds for eaier countdown claculation 
     STUDY_TIME = 25 * 60
     BREAK_TIME = 5 * 60
 
+# binds to the main window (calendar), shows much time is left, self.is_running is to prevent multiple timers at once
     def __init__(self, parent):
         super().__init__(parent)
         self.timer = None
         self.time_left = 0
         self.is_running = False
 
+# shows the window title at the top (pack(pady=10) makes it vertical) 
         tk.Label(self, text="Pomodoro Timer", font=("Arial", 18, "bold")).pack(pady=10)
 
+# canvas lets us use drawing graphics for the circular timer. create arc gives the timer a color and create text puts time time in the middle of the clock)
         self.canvas = tk.Canvas(self, width=260, height=260, bg="#FFF9E6", highlightthickness=0)
         self.timer_arc = self.canvas.create_arc(10, 10, 250, 250, start=90, extent=0, fill="#FF6F61", outline="")
         self.timer_text = self.canvas.create_text(130, 130, text="00:00", fill="black", font=("Arial", 35, "bold"))
         self.canvas.pack()
 
+# shows the current timer status 
         self.lbl_status = tk.Label(self, text="Ready!", bg="#FFF9E6", font=("Arial", 12))
         self.lbl_status.pack(pady=10)
 
+# inserts 3 buttons, 1. study 2. break 3. cancel
         btns = tk.Frame(self, bg="#FFF9E6")
         btns.pack()
         tk.Button(btns, text="Start Study", command=self.start_study, width=12, bg="#1FD655", fg="white").grid(row=0, column=0, padx=5)
         tk.Button(btns, text="Start Break", command=self.start_break, width=12, bg="#1E90FF", fg="white").grid(row=0, column=1, padx=5)
         tk.Button(self, text="Cancel", command=self.cancel_timer, width=26, bg="#FF0800", fg="white").pack(pady=10)
 
-        # Right-click the clock to start studying quickly
+# Right-click the clock to start studying quickly
         self.canvas.bind("<Button-3>", lambda e: self.start_study())
 
+# checks if the timer is already running, sets time_left to study time, updates status label, and starts the countdown loop
     def start_study(self):
         if self.is_running:
             return
@@ -579,6 +587,7 @@ class PomodoroApp(tk.Frame):
         self.time_left = self.STUDY_TIME
         self._tick()
 
+# does the same as start_study but only it's for the break.  
     def start_break(self):
         if self.is_running:
             return
@@ -587,6 +596,7 @@ class PomodoroApp(tk.Frame):
         self.time_left = self.BREAK_TIME
         self._tick()
 
+# makes the countdown calculations; converts seconds to minutes. apdates the canvas text and arc progression. 
     def _tick(self):
         mins, secs = divmod(self.time_left, 60)
         self.canvas.itemconfig(self.timer_text, text=f"{mins:02d}:{secs:02d}")
@@ -602,6 +612,7 @@ class PomodoroApp(tk.Frame):
             self.lbl_status.config(text="Done!")
             self.is_running = False
 
+# stops the loop & resets the clock
     def cancel_timer(self):
         if self.timer:
             self.after_cancel(self.timer)
