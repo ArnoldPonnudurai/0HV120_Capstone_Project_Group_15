@@ -1,0 +1,564 @@
+# ------------------------------------------------------------
+# NOTE SYSTEM (Reader-style: R8 GUI + R9 Files)
+# ------------------------------------------------------------
+# This module implements the Note System part of your capstone:
+# - tkinter GUI (R8) for creating, editing, deleting, pinning, and searching notes
+# - JSON file I/O (R9.3) for persistence (notes_data.json)
+# - CSV export and .txt import (also R9.3 file handling)
+# - Plain OOP with classic __init__ methods (R7 Objects & Classes)
+#
+# Structure (clean separation of concerns):
+#   1) Note ............ simple model object (no dataclasses)
+#   2) NotesService .... data layer: load/save JSON, CRUD, CSV export
+#   3) NotesPanel ...... GUI layer: Look + Binding + Work + Event Loop (R8)
+#
+# How it works (flow summary):
+#   - At startup, NotesService loads existing notes from notes_data.json (if present).
+#   - The GUI (NotesPanel) shows a list of notes (pinned first) + a right-hand form.
+#   - User actions (New/Save/Delete/Pin/Search/Import/Export) call NotesService methods.
+#   - NotesService updates in-memory notes and writes back to JSON.
+#   - The list refreshes so the user immediately sees changes.
+# ------------------------------------------------------------
+
+import json            # R9.3: read/write JSON file
+import csv             # R9.3: export to CSV
+import os              # check file existence
+from datetime import datetime  # timestamps for created/updated
+from tkinter import *          # R8: GUI widgets
+from tkinter import messagebox, filedialog  # dialogs for feedback & file pickers
+
+
+# ============================================================
+# MODEL (R7): Note
+# ------------------------------------------------------------
+# A plain Python class that stores all data for one note.
+# Fields:
+#   id, title, body, course, tags, pinned, created_at, updated_at
+# Optional fields to link with calendar info:
+#   day, session_start ("HH:MM"), session_duration (minutes)
+# ============================================================
+class Note:
+    """A simple Note object using classic __init__ (no dataclasses)."""
+
+    def __init__(self, id, title, body, course, tags=None, pinned=False,
+                 day=None, session_start=None, session_duration=None):
+        self.id = id                                 # unique numeric id
+        self.title = title                           # short title of the note
+        self.body = body                             # long text
+        self.course = course                         # course name reference
+        self.tags = tags or []                       # list of string tags
+        self.pinned = pinned                         # bool: show at top if True
+
+        # Optional link to weekly study sessions (if you use that feature)
+        self.day = day                               # e.g. "Monday"
+        self.session_start = session_start           # e.g. "13:30"
+        self.session_duration = session_duration     # e.g. "60" (minutes)
+
+        # Automatic timestamps (ISO strings)
+        self.created_at = datetime.now().isoformat()
+        self.updated_at = datetime.now().isoformat()
+
+    def to_dict(self):
+        """Convert to a serializable dictionary for saving to JSON (R9.3)."""
+        return {
+            "id": self.id,
+            "title": self.title,
+            "body": self.body,
+            "course": self.course,
+            "tags": self.tags,
+            "pinned": self.pinned,
+            "day": self.day,
+            "session_start": self.session_start,
+            "session_duration": self.session_duration,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+# ============================================================
+# DATA LAYER (R9.3): NotesService
+# ------------------------------------------------------------
+# - Loads notes from notes_data.json on startup
+# - Provides CRUD operations the GUI can call
+# - Saves back to notes_data.json after each change
+# - Exports to CSV; parses tag strings
+# ============================================================
+class NotesService:
+    """Handles storage, loading/saving, and note operations."""
+
+    def __init__(self, data_file="notes_data.json"):
+        self._data_file = data_file
+        self._notes = {}     # in-memory store: {id: Note}
+        self._next_id = 1    # running id counter
+        self._load()         # load from disk if file exists
+
+    # ---------- persistence ----------
+    def _load(self):
+        """Load notes from JSON file if present (R9.3)."""
+        if not os.path.exists(self._data_file):
+            return  # nothing to load on first run
+
+        try:
+            with open(self._data_file, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception:
+            # If file corrupted / unreadable, start fresh
+            return
+
+        # Restore next id and all existing notes
+        self._next_id = raw.get("_next_id", 1)
+        for row in raw.get("notes", []):
+            note = Note(
+                id=row["id"],
+                title=row["title"],
+                body=row["body"],
+                course=row["course"],
+                tags=row.get("tags", []),
+                pinned=row.get("pinned", False),
+                day=row.get("day"),
+                session_start=row.get("session_start"),
+                session_duration=row.get("session_duration"),
+            )
+            note.created_at = row.get("created_at", datetime.now().isoformat())
+            note.updated_at = row.get("updated_at", datetime.now().isoformat())
+            self._notes[note.id] = note
+
+    def _save(self):
+        """Write all notes and the next-id back to JSON (R9.3)."""
+        data = {
+            "_next_id": self._next_id,
+            "notes": [n.to_dict() for n in self._notes.values()]
+        }
+        with open(self._data_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    # ---------- CRUD ----------
+    def create_note(self, title, body, course, tags_text,
+                    day=None, session_start=None, session_duration=None):
+        """Create a new note object, store it in memory + JSON."""
+        note_id = self._next_id
+        self._next_id += 1
+        tags = self._parse_tags(tags_text)
+        note = Note(note_id, title, body, course, tags, pinned=False,
+                    day=day, session_start=session_start, session_duration=session_duration)
+        self._notes[note_id] = note
+        self._save()  # persist change
+        return note
+
+    def update_note(self, note_id, title, body, course, tags_text, pinned,
+                    day=None, session_start=None, session_duration=None):
+        """Modify an existing note and persist changes."""
+        note = self._notes.get(note_id)
+        if not note:
+            return None
+        note.title = title
+        note.body = body
+        note.course = course
+        note.tags = self._parse_tags(tags_text)
+        note.pinned = bool(pinned)
+        note.day = day
+        note.session_start = session_start
+        note.session_duration = session_duration
+        note.updated_at = datetime.now().isoformat()
+        self._save()
+        return note
+
+    def delete_note(self, note_id):
+        """Remove a note from memory and disk."""
+        if note_id in self._notes:
+            del self._notes[note_id]
+            self._save()
+            return True
+        return False
+
+    # ---------- queries ----------
+    def all_notes(self):
+        """Return list of notes sorted: pinned first, then by updated_at."""
+        notes = list(self._notes.values())
+        notes.sort(key=lambda n: (not n.pinned, n.updated_at))  # pinned=False sorts after pinned=True
+        return notes
+
+    def search(self, keyword="", course="", tag=""):
+        """Filter notes by keyword (title/body), course, or a single tag."""
+        keyword = keyword.lower().strip()
+        course = course.lower().strip()
+        tag = tag.lower().strip()
+
+        result = []
+        for n in self._notes.values():
+            ok = True
+            if keyword and keyword not in n.title.lower() and keyword not in n.body.lower():
+                ok = False
+            if ok and course and course != (n.course or "").lower():
+                ok = False
+            if ok and tag and tag not in [t.lower() for t in n.tags]:
+                ok = False
+            if ok:
+                result.append(n)
+
+        result.sort(key=lambda n: (not n.pinned, n.updated_at))
+        return result
+
+    def toggle_pin(self, note_id):
+        """Flip the pinned flag (True <-> False) and save."""
+        n = self._notes.get(note_id)
+        if not n:
+            return None
+        n.pinned = not n.pinned
+        n.updated_at = datetime.now().isoformat()
+        self._save()
+        return n
+
+    def list_courses(self):
+        """Return sorted list of unique course names found in notes."""
+        courses = {n.course for n in self._notes.values() if n.course}
+        return sorted(courses)
+
+    # ---------- export ----------
+    def export_csv(self, filepath, notes_list):
+        """Export given notes to a CSV file (R9.3)."""
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            # header row
+            w.writerow([
+                "id", "title", "course", "day", "session_start", "session_duration",
+                "tags", "pinned", "created_at", "updated_at", "body"
+            ])
+            # one row per note
+            for n in notes_list:
+                w.writerow([
+                    n.id, n.title, n.course or "",
+                    n.day or "", n.session_start or "", n.session_duration or "",
+                    ";".join(n.tags),
+                    "yes" if n.pinned else "no",
+                    n.created_at, n.updated_at,
+                    (n.body or "").replace("\n", "\\n")  # keep CSV on one line
+                ])
+
+    # ---------- helpers ----------
+    def _parse_tags(self, tags_text):
+        """Turn 'a, b; c' into ['a','b','c'] (cleaned)."""
+        if not tags_text:
+            return []
+        raw = tags_text.replace(";", ",").split(",")
+        cleaned = [t.strip() for t in raw if t.strip()]
+        return cleaned
+
+
+# ============================================================
+# GUI LAYER (R8): NotesPanel
+# ------------------------------------------------------------
+# Builds the user interface and binds events:
+# - Left list (Listbox + Scrollbar) of notes
+# - Right form (Entries/Text/Checkbutton) to edit a note
+# - Buttons for New/Save/Delete/Pin/Import/Export
+# - Search area for keyword/course/tag
+# Calls NotesService for all data changes.
+# ============================================================
+class NotesPanel:
+    """A tkinter UI for managing notes (Look + Binding + Work + Event Loop)."""
+
+    def __init__(self, root, service):
+        self.service = service
+        self.root = root
+        self.root.title("Note System - Capstone (Reader Style)")
+
+        # ========== Left: listbox with notes ==========
+        left = Frame(root)
+        left.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+
+        Label(left, text="Notes (pinned first):", font="Arial 12 bold").pack(anchor="w")
+
+        self.listbox = Listbox(left, height=20)
+        self.listbox.pack(side="left", fill="both", expand=True)
+        self.listbox.bind("<<ListboxSelect>>", self._on_select)
+
+        sb = Scrollbar(left, command=self.listbox.yview)
+        sb.pack(side="right", fill="y")
+        self.listbox.config(yscrollcommand=sb.set)
+
+        # ========== Right: editor/form ==========
+        right = Frame(root)
+        right.pack(side="right", fill="both", expand=True, padx=8, pady=8)
+
+        # Title
+        Label(right, text="Title").grid(row=0, column=0, sticky="w")
+        self.title_var = StringVar()
+        Entry(right, textvariable=self.title_var, width=40).grid(row=0, column=1, sticky="we")
+
+        # Course
+        Label(right, text="Course").grid(row=1, column=0, sticky="w")
+        self.course_var = StringVar()
+        Entry(right, textvariable=self.course_var, width=40).grid(row=1, column=1, sticky="we")
+
+        # Tags
+        Label(right, text="Tags (comma/semicolon)").grid(row=2, column=0, sticky="w")
+        self.tags_var = StringVar()
+        Entry(right, textvariable=self.tags_var, width=40).grid(row=2, column=1, sticky="we")
+
+        # Day (OptionMenu)
+        Label(right, text="Day").grid(row=3, column=0, sticky="w")
+        self.day_var = StringVar(value="")
+        OptionMenu(right, self.day_var, "", "Monday", "Tuesday", "Wednesday",
+                   "Thursday", "Friday", "Saturday", "Sunday").grid(row=3, column=1, sticky="we")
+
+        # Session start + duration
+        sess = Frame(right)
+        sess.grid(row=4, column=0, columnspan=2, sticky="we")
+        Label(sess, text="Start (HH:MM)").pack(side="left")
+        self.sstart_var = StringVar()
+        Entry(sess, textvariable=self.sstart_var, width=10).pack(side="left", padx=4)
+        Label(sess, text="Duration (min)").pack(side="left")
+        self.sdur_var = StringVar()
+        Entry(sess, textvariable=self.sdur_var, width=10).pack(side="left", padx=4)
+
+        # Pinned
+        self.pin_var = IntVar()
+        Checkbutton(right, text="Pinned", variable=self.pin_var).grid(row=5, column=1, sticky="w")
+
+        # Body
+        Label(right, text="Body").grid(row=6, column=0, sticky="nw")
+        self.body_txt = Text(right, width=40, height=12)
+        self.body_txt.grid(row=6, column=1, sticky="we")
+
+        # Buttons row
+        btns = Frame(right)
+        btns.grid(row=7, column=0, columnspan=2, pady=6, sticky="we")
+
+        Button(btns, text="New", command=self._new_note, width=10).pack(side="left", padx=3)
+        Button(btns, text="Save", command=self._save_note, width=10).pack(side="left", padx=3)
+        Button(btns, text="Delete", command=self._delete_note, width=10).pack(side="left", padx=3)
+        Button(btns, text="Pin/Unpin", command=self._pin_toggle, width=10).pack(side="left", padx=3)
+        Button(btns, text="Import .txt", command=self._import_txt, width=12).pack(side="left", padx=3)  # R9.3
+        Button(btns, text="Export CSV", command=self._export_csv, width=12).pack(side="left", padx=3)   # R9.3
+
+        # Search row (keyword/course/tag)
+        search = LabelFrame(right, text="Search")
+        search.grid(row=8, column=0, columnspan=2, pady=6, sticky="we")
+
+        Label(search, text="Keyword").grid(row=0, column=0, sticky="w")
+        self.kw_var = StringVar()
+        Entry(search, textvariable=self.kw_var, width=18).grid(row=0, column=1, sticky="w", padx=4)
+
+        Label(search, text="Course").grid(row=0, column=2, sticky="w")
+        self.scourse_var = StringVar()
+        Entry(search, textvariable=self.scourse_var, width=12).grid(row=0, column=3, sticky="w", padx=4)
+
+        Label(search, text="Tag").grid(row=0, column=4, sticky="w")
+        self.stag_var = StringVar()
+        Entry(search, textvariable=self.stag_var, width=12).grid(row=0, column=5, sticky="w", padx=4)
+
+        Button(search, text="Search", command=self._do_search, width=10).grid(row=0, column=6, padx=6)
+        Button(search, text="Clear", command=self._clear_search, width=10).grid(row=0, column=7, padx=2)
+
+        # status line
+        self.status = StringVar()
+        self.status.set("Ready.")
+        Label(right, textvariable=self.status, anchor="w", relief="sunken").grid(
+            row=9, column=0, columnspan=2, sticky="we", pady=(8, 0)
+        )
+
+        # Track which note is selected in the list (None = new note)
+        self._current_id = None
+
+        # initial list fill from service
+        self._refresh_list(self.service.all_notes())
+
+    # ----------------- helpers -----------------
+    def _read_body(self):
+        """Read multi-line text from the Body text widget."""
+        return self.body_txt.get("1.0", "end-1c")
+
+    def _set_body(self, text):
+        """Replace the Body text with the given string."""
+        self.body_txt.delete("1.0", END)
+        self.body_txt.insert("1.0", text)
+
+    def _refresh_list(self, notes):
+        """Fill the listbox with notes (pinned first)."""
+        self.listbox.delete(0, END)
+        for n in notes:
+            prefix = "📌 " if n.pinned else ""
+            display = f"{prefix}{n.id} | {n.title}  [{n.course or '-'}]"
+            self.listbox.insert(END, display)
+        self.status.set(f"Loaded {len(notes)} note(s).")
+
+    def _current_selection_id(self):
+        """Extract selected note id from listbox line."""
+        sel = self.listbox.curselection()
+        if not sel:
+            return None
+        text = self.listbox.get(sel[0])
+        # text looks like: "📌 12 | Title  [Course]"  or "12 | Title  [Course]"
+        left = text.split("|", 1)[0]
+        digits = "".join(ch for ch in left if ch.isdigit())
+        return int(digits) if digits else None
+
+    # ----------------- event handlers (Work) -----------------
+    def _on_select(self, event):
+        """When user selects a note, load its fields on the right (Look+Work)."""
+        note_id = self._current_selection_id()
+        if note_id is None:
+            return
+        # Find that note and populate the form
+        for n in self.service.all_notes():
+            if n.id == note_id:
+                self._current_id = n.id
+                self.title_var.set(n.title or "")
+                self.course_var.set(n.course or "")
+                self.tags_var.set(", ".join(n.tags) if n.tags else "")
+                self.pin_var.set(1 if n.pinned else 0)
+                self.day_var.set(n.day or "")
+                self.sstart_var.set(n.session_start or "")
+                self.sdur_var.set("" if n.session_duration is None else str(n.session_duration))
+                self._set_body(n.body or "")
+                self.status.set(f"Selected note #{n.id}")
+                break
+
+    def _new_note(self):
+        """Clear form to start a brand-new note (no id yet)."""
+        self._current_id = None
+        self.title_var.set("")
+        self.course_var.set("")
+        self.tags_var.set("")
+        self.pin_var.set(0)
+        self.day_var.set("")
+        self.sstart_var.set("")
+        self.sdur_var.set("")
+        self._set_body("")
+        self.status.set("New note…")
+
+    def _save_note(self):
+        """Create or update the note based on the form fields."""
+        title = self.title_var.get().strip()
+        body = self._read_body().strip()
+        course = self.course_var.get().strip()
+        tags_text = self.tags_var.get()
+
+        # optional links to session
+        day = (self.day_var.get() or "").strip() or None
+        sstart = (self.sstart_var.get() or "").strip() or None
+        sdur = (self.sdur_var.get() or "").strip() or None
+
+        if not title:
+            messagebox.showwarning("Missing title", "Please enter a title.")
+            return
+
+        if self._current_id is None:
+            # Create a fresh note (service assigns id)
+            note = self.service.create_note(title, body, course, tags_text, day, sstart, sdur)
+            self._current_id = note.id
+            self.status.set(f"Created note #{note.id}")
+        else:
+            # Update existing note
+            pinned = self.pin_var.get()
+            note = self.service.update_note(self._current_id, title, body, course, tags_text, pinned, day, sstart, sdur)
+            if note:
+                self.status.set(f"Updated note #{note.id}")
+            else:
+                self.status.set("Update failed (not found).")
+
+        # refresh list after changes
+        self._refresh_list(self.service.all_notes())
+
+    def _delete_note(self):
+        """Delete the currently selected note (with confirmation)."""
+        if self._current_id is None:
+            messagebox.showinfo("No selection", "Select a note first.")
+            return
+        ok = messagebox.askyesno("Delete", "Are you sure you want to delete this note?")
+        if not ok:
+            return
+        self.service.delete_note(self._current_id)
+        self._new_note()  # clear form
+        self._refresh_list(self.service.all_notes())
+        self.status.set("Note deleted.")
+
+    def _pin_toggle(self):
+        """Pin/unpin the selected note and refresh the list."""
+        if self._current_id is None:
+            messagebox.showinfo("No selection", "Select a note first.")
+            return
+        n = self.service.toggle_pin(self._current_id)
+        if not n:
+            self.status.set("Pin toggle failed.")
+            return
+        self.pin_var.set(1 if n.pinned else 0)
+        self._refresh_list(self.service.all_notes())
+        self.status.set(f"{'Pinned' if n.pinned else 'Unpinned'} note #{n.id}")
+
+    def _do_search(self):
+        """Search by keyword / course / tag and show results in the list."""
+        res = self.service.search(
+            keyword=self.kw_var.get(),
+            course=self.scourse_var.get(),
+            tag=self.stag_var.get(),
+        )
+        self._refresh_list(res)
+        self.status.set(f"Search results: {len(res)} note(s).")
+
+    def _clear_search(self):
+        """Reset search fields and show all notes again."""
+        self.kw_var.set("")
+        self.scourse_var.set("")
+        self.stag_var.set("")
+        self._refresh_list(self.service.all_notes())
+        self.status.set("Search cleared.")
+
+    def _export_csv(self):
+        """Export whatever is currently listed to a CSV file (keeps the same order)."""
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv")],
+            title="Export notes to CSV"
+        )
+        if not path:
+            return
+
+        # Determine which notes are visible in the listbox (by extracting IDs)
+        ids = []
+        for i in range(self.listbox.size()):
+            line = self.listbox.get(i)
+            digits = "".join(ch for ch in line.split("|", 1)[0] if ch.isdigit())
+            if digits:
+                ids.append(int(digits))
+
+        # Build the ordered list of Note objects
+        all_map = {n.id: n for n in self.service.all_notes()}
+        notes = [all_map[nid] for nid in ids if nid in all_map]
+
+        self.service.export_csv(path, notes)
+        self.status.set(f"Exported {len(notes)} note(s) to CSV.")
+
+    def _import_txt(self):
+        """Append a .txt file's contents into the current Body field (R9.3)."""
+        path = filedialog.askopenfilename(
+            title="Import .txt into body",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+            current = self._read_body()
+            combined = (current + ("\n" if current else "") + content).strip()
+            self._set_body(combined)
+            self.status.set("Imported .txt into body.")
+        except Exception as e:
+            messagebox.showerror("Import error", str(e))
+
+
+# ============================================================
+# MAIN (R8): create window, attach service + panel, start loop
+# ============================================================
+def main():
+    root = Tk()                 # create main Tk window
+    root.minsize(900, 600)      # give the window a reasonable minimum size
+    service = NotesService()    # data/persistence layer
+    NotesPanel(root, service)   # GUI on top of the data service
+    root.mainloop()             # Event Loop (R8): wait for user actions
+
+
+if __name__ == "__main__":
+    main()
