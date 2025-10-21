@@ -26,48 +26,59 @@ class CalendarApp(tk.Frame):
     Right-click on a session to edit/delete.
     """
 
+    # Constants for days and calendar layout.
     DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    START_HOUR, END_HOUR = 8, 19
-    CELL_HEIGHT, CELL_WIDTH = 40, 120
+    START_HOUR, END_HOUR = 8, 19    # calendar hours (8:00–19:00).
+    CELL_HEIGHT, CELL_WIDTH = 40, 120    # pixel size for each hour/day block.
 
     def __init__(self, parent):
         super().__init__(parent)
 
-        self.sessions = []     # list of dicts: {course, day, start_time, end_time, color}
-        self.courses = {}      # course -> color
+        # Data structures.
+        self.sessions = []     # list of all sessions (each is a dict): {course, day, start_time, end_time, color}.
+        self.courses = {}      # maps course names -> colors.
 
-        # -------- Controls (left) --------
+        # -------- Controls (left panel) --------
         left = tk.Frame(self)
         left.pack(side=tk.LEFT, padx=10, pady=10, fill="y")
 
+        # Course name entry.
         tk.Label(left, text="Course:").grid(row=0, column=0, sticky="w")
         self.course_entry = tk.Entry(left, width=20)
         self.course_entry.grid(row=0, column=1, sticky="w")
+
+        # Button to choose course color.
         tk.Button(left, text="Choose Color", command=self._choose_color).grid(row=0, column=2, padx=6)
 
+        # Day selection dropdown.
         tk.Label(left, text="Day:").grid(row=1, column=0, sticky="w")
         self.day_var = tk.StringVar(value=self.DAYS[0])
         tk.OptionMenu(left, self.day_var, *self.DAYS).grid(row=1, column=1, sticky="w")
 
+        # Start time entry.
         tk.Label(left, text="Start (HH:MM):").grid(row=2, column=0, sticky="w")
         self.start_entry = tk.Entry(left, width=10)
         self.start_entry.grid(row=2, column=1, sticky="w")
 
+         # End time entry.
         tk.Label(left, text="End (HH:MM):").grid(row=3, column=0, sticky="w")
         self.end_entry = tk.Entry(left, width=10)
         self.end_entry.grid(row=3, column=1, sticky="w")
 
+        # Buttons for actions.
         tk.Button(left, text="Add Session", command=self._add_session).grid(row=4, column=0, columnspan=3, pady=6, sticky="we")
         tk.Button(left, text="Import .ics", command=self._import_ics).grid(row=5, column=0, columnspan=3, pady=2, sticky="we")
         tk.Button(left, text="Export CSV", command=self._export_csv).grid(row=6, column=0, columnspan=3, pady=2, sticky="we")
 
-        # -------- Turtle Canvas (right) --------
+        # -------- Turtle Canvas for calendar (right panel) --------
         right = tk.Frame(self)
         right.pack(side=tk.RIGHT, padx=6, pady=6, fill="both", expand=True)
 
+        # Create a Tkinter canvas.
         self.canvas = tk.Canvas(right, width=800, height=600, bg="white")
         self.canvas.pack(fill="both", expand=True)
 
+        # Attach Turtle to canvas.
         self.screen = turtle.TurtleScreen(self.canvas)
         self.screen.bgcolor("white")
         self.t = turtle.RawTurtle(self.screen)
@@ -75,20 +86,34 @@ class CalendarApp(tk.Frame):
         self.t.speed(0)
         self.t.penup()
 
+        # Bind right-click to show context menu for editing/deleting.
         self.canvas.bind("<Button-3>", self._show_context_menu)
+
+        # Draw initial empty calendar.
         self._draw_calendar()
 
     # ---------- Helpers ----------
     def _time_to_index(self, time_str: str) -> float:
+        """
+        Convert 'HH:MM' string into a float hour for placement on calendar.
+        """
         t = datetime.strptime(time_str, "%H:%M")
         return t.hour + t.minute / 60
 
     def _auto_color(self, course: str) -> str:
+        """
+        Generate a consistent color for a course based on its name.
+        Returns a hex color string like '#a1b2c3'.
+        """
         h = abs(hash(course)) & 0xFFFFFF
         return f"#{h:06x}"
 
-    # ---------- Actions ----------
+    # ---------- User actions ----------
     def _choose_color(self):
+        """
+        Let the user pick a color for the course.
+        Updates self.courses dictionary and redraws calendar.
+        """
         course = self.course_entry.get().strip()
         if not course:
             return
@@ -98,34 +123,55 @@ class CalendarApp(tk.Frame):
             self._draw_calendar()
 
     def _add_session(self):
+        """
+        Add a new session from the left-panel inputs.
+        Validates inputs and assigns color automatically if needed.
+        """
         course = self.course_entry.get().strip()
         day = self.day_var.get()
         start = self.start_entry.get().strip()
         end = self.end_entry.get().strip()
+
+        # Validate required fields.
         if not course or not start or not end:
             messagebox.showerror("Missing data", "Course, start, and end are required.")
             return
+
+        # Assign color if not chosen.
         if course not in self.courses:
             self.courses[course] = self._auto_color(course)
+
+        # Convert times to float indices.
         start_idx = self._time_to_index(start)
         end_idx = self._time_to_index(end)
+
+        # Ensure session is at least 30 minutes.
         if end_idx - start_idx < 0.5:
             messagebox.showerror("Error", "Session must be at least 30 minutes!")
             return
+
+        # Add session to list.
         self.sessions.append({
             "course": course, "day": day,
             "start_time": start, "end_time": end,
             "color": self.courses[course]
         })
+
+        # Redraw calendar with new session.
         self._draw_calendar()
 
     def _import_ics(self):
+        """
+        Import sessions from a .ics file.
+        Parses VEVENT blocks and adds sessions for Mon–Fri only.
+        """
         path = filedialog.askopenfilename(filetypes=[("iCalendar Files", "*.ics")])
         if not path:
             return
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
 
+        # Find all VEVENT blocks.
         events = re.findall(r'BEGIN:VEVENT(.*?)END:VEVENT', content, re.DOTALL)
         added = 0
         for e in events:
@@ -138,6 +184,7 @@ class CalendarApp(tk.Frame):
             s = dtstart.group(1).strip().rstrip('Z')
             ed = dtend.group(1).strip().rstrip('Z')
 
+            # Try multiple datetime formats.
             for fmt in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M"):
                 try:
                     start_dt = datetime.strptime(s, fmt)
@@ -146,14 +193,16 @@ class CalendarApp(tk.Frame):
                 except ValueError:
                     continue
             else:
-                continue
+                continue    # skip if no format matches.
 
+            # Only add Mon–Fri sessions.
             day_name = start_dt.strftime("%A")
             if day_name not in self.DAYS:
                 continue
             start_time = start_dt.strftime("%H:%M")
             end_time = end_dt.strftime("%H:%M")
 
+            # Auto-assign color if needed.
             if summary not in self.courses:
                 self.courses[summary] = self._auto_color(summary)
             self.sessions.append({
@@ -167,6 +216,10 @@ class CalendarApp(tk.Frame):
         messagebox.showinfo("ICS Import", f"Imported {added} session(s).")
 
     def _export_csv(self):
+        """
+        Export all sessions to a CSV file.
+        Columns: course, day, start_time, end_time, color
+        """
         path = filedialog.asksaveasfilename(defaultextension=".csv")
         if not path:
             return
@@ -177,10 +230,13 @@ class CalendarApp(tk.Frame):
                 w.writerow(s)
         messagebox.showinfo("CSV Export", f"Exported {len(self.sessions)} sessions.")
 
-    # ---------- Drawing ----------
+    # ---------- Drawing the calendar ----------
     def _draw_calendar(self):
+        """
+        Draw the full calendar with day headers, hour lines, and session blocks.
+        """
         t = self.t
-        t.clear()
+        t.clear()    # remove previous drawings.
 
         num_days = len(self.DAYS)
         num_hours = self.END_HOUR - self.START_HOUR + 1
@@ -189,14 +245,14 @@ class CalendarApp(tk.Frame):
         start_x = -cal_w / 2
         start_y = cal_h / 2
 
-        # Day headers
+         # Draw day headers.
         for i, day in enumerate(self.DAYS):
             x = start_x + i * self.CELL_WIDTH + self.CELL_WIDTH / 2
             y = start_y + 20
             t.goto(x, y)
             t.write(day, align="center", font=("Arial", 12, "bold"))
 
-        # Horizontal lines + hour labels
+        # Draw horizontal hour lines.
         for h in range(self.START_HOUR, self.END_HOUR + 1):
             y = start_y - (h - self.START_HOUR) * self.CELL_HEIGHT
             t.goto(start_x - 10, y - self.CELL_HEIGHT / 2)
@@ -206,20 +262,20 @@ class CalendarApp(tk.Frame):
             t.forward(cal_w)
             t.penup()
 
-        # Vertical lines
+        # Draw vertical day lines.
         for i in range(num_days := (num_days := num_days)):
             pass  # noop quirky; keeps linter happy in some editors
         for i in range(num_days + 1):
             x = start_x + i * self.CELL_WIDTH
             t.goto(x, start_y)
-            t.setheading(270)
+            t.setheading(270)    # point down.
             t.pendown()
             t.forward(cal_h)
             t.penup()
-            t.setheading(0)
+            t.setheading(0)    # reset heading.
 
-        # Sessions
-        self._session_rects = []
+        # Draw session blocks.
+        self._session_rects = []    # store positions for context menu.
         for s in self.sessions:
             if s["day"] not in self.DAYS:
                 continue
@@ -230,6 +286,7 @@ class CalendarApp(tk.Frame):
             height = (ei - si) * self.CELL_HEIGHT
             x_start = start_x + di * self.CELL_WIDTH
 
+            # Draw filled rectangle.
             t.goto(x_start, y_start)
             t.fillcolor(s["color"])
             t.begin_fill()
@@ -240,16 +297,24 @@ class CalendarApp(tk.Frame):
                 t.right(90)
             t.end_fill()
 
+            # Write course name inside rectangle.
             t.goto(x_start + self.CELL_WIDTH / 2, y_start - height / 2 + 5)
             t.write(s["course"], align="center", font=("Arial", 10, "bold"))
+
+            # Save rectangle coordinates for right-click detection.
             self._session_rects.append((x_start, y_start, x_start + self.CELL_WIDTH, y_start - height, s))
 
     # ---------- Context menu ----------
     def _show_context_menu(self, event):
+        """
+        Show edit/delete menu when right-clicking a session block.
+        """
+        # Convert mouse coordinates to turtle coordinates.
         cx = event.x - self.canvas.winfo_width() / 2
         cy = self.canvas.winfo_height() / 2 - event.y
         for x1, y1, x2, y2, s in getattr(self, "_session_rects", []):
             if x1 <= cx <= x2 and y2 <= cy <= y1:
+                # Found clicked session.
                 m = tk.Menu(self, tearoff=0)
                 m.add_command(label="Edit", command=lambda sess=s: self._edit_session(sess))
                 m.add_command(label="Delete", command=lambda sess=s: self._delete_session(sess))
@@ -257,13 +322,22 @@ class CalendarApp(tk.Frame):
                 return
 
     def _edit_session(self, s):
+        """
+        Open a popup window to edit a session.
+        """
         win = tk.Toplevel(self)
         win.title(f"Edit Session: {s['course']}")
+
+        # Day dropdown.
         tk.Label(win, text="Day:").grid(row=0, column=0)
         day_var = tk.StringVar(value=s["day"])
         tk.OptionMenu(win, day_var, *self.DAYS).grid(row=0, column=1)
+
+        # Start time.
         tk.Label(win, text="Start (HH:MM):").grid(row=1, column=0)
         e1 = tk.Entry(win); e1.insert(0, s["start_time"]); e1.grid(row=1, column=1)
+
+        # End time.
         tk.Label(win, text="End (HH:MM):").grid(row=2, column=0)
         e2 = tk.Entry(win); e2.insert(0, s["end_time"]); e2.grid(row=2, column=1)
 
@@ -281,6 +355,9 @@ class CalendarApp(tk.Frame):
         tk.Button(win, text="Save", command=save).grid(row=3, column=0, columnspan=2)
 
     def _delete_session(self, s):
+        """
+        Delete a session after confirming with the user.
+        """
         if messagebox.askyesno("Delete", f"Delete '{s['course']}' on {s['day']}'?"):
             self.sessions.remove(s)
             self._draw_calendar()
